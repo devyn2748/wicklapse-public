@@ -1,0 +1,10 @@
+node_modules/
+.output/
+Wicklapse-Unpacked/
+.wxt/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+*.pem

@@ -1,0 +1,92 @@
+import { browser } from "wxt/browser";
+import {
+  RpcSettingsSchema,
+  ShareContextSchema,
+  type RpcSettings,
+  type ShareContext,
+  type StudioProject,
+} from "./domain";
+import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
+
+const KEYS = {
+  latestShareContext: "wicklapse.latestShareContext",
+  rpcSettings: "wicklapse.rpcSettings",
+  project: "wicklapse.project",
+  studioSettings: "wicklapse.studioSettings",
+} as const;
+
+export async function saveShareContext(context: ShareContext): Promise<void> {
+  await browser.storage.local.set({ [KEYS.latestShareContext]: ShareContextSchema.parse(context) });
+}
+
+export async function loadShareContext(): Promise<ShareContext | null> {
+  const result = await browser.storage.local.get(KEYS.latestShareContext);
+  const parsed = ShareContextSchema.safeParse(result[KEYS.latestShareContext]);
+  return parsed.success ? parsed.data : null;
+}
+
+export async function saveRpcSettings(settings: RpcSettings): Promise<void> {
+  const validated = RpcSettingsSchema.parse(settings);
+  if (validated.remember) {
+    await browser.storage.local.set({ [KEYS.rpcSettings]: validated });
+    try {
+      await browser.storage.session.remove(KEYS.rpcSettings);
+    } catch {
+      // Content scripts cannot always clean session storage. The remembered local value is authoritative.
+    }
+    return;
+  }
+
+  await browser.storage.session.set({ [KEYS.rpcSettings]: validated });
+  await browser.storage.local.remove(KEYS.rpcSettings);
+}
+
+export async function loadRpcSettings(): Promise<RpcSettings | null> {
+  let sessionValue: unknown;
+  try {
+    const session = await browser.storage.session.get(KEYS.rpcSettings);
+    sessionValue = session[KEYS.rpcSettings];
+  } catch {
+    // Chrome does not expose storage.session to content scripts unless its access level is widened.
+    // First-run and remembered credentials use storage.local, so the in-page Instant UI can safely continue.
+  }
+  const local = await browser.storage.local.get(KEYS.rpcSettings);
+  const parsed = RpcSettingsSchema.safeParse(sessionValue ?? local[KEYS.rpcSettings]);
+  return parsed.success ? parsed.data : null;
+}
+
+export async function clearRpcSettings(): Promise<void> {
+  await browser.storage.local.remove(KEYS.rpcSettings);
+  try {
+    await browser.storage.session.remove(KEYS.rpcSettings);
+  } catch {
+    // A content-script caller can still clear the persisted value without session access.
+  }
+}
+
+export async function saveProject(project: StudioProject): Promise<void> {
+  await browser.storage.local.set({ [KEYS.project]: project });
+}
+
+export async function loadProject(): Promise<StudioProject | null> {
+  const result = await browser.storage.local.get(KEYS.project);
+  const value = result[KEYS.project];
+  if (!value || typeof value !== "object") return null;
+  return value as StudioProject;
+}
+
+export async function saveStudioSettings(settings: StudioSettings): Promise<void> {
+  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 2, settings } });
+}
+
+export async function loadStudioSettings(): Promise<StudioSettings> {
+  const result = await browser.storage.local.get(KEYS.studioSettings);
+  const value = result[KEYS.studioSettings];
+  if (!value || typeof value !== "object" || (value as { version?: number }).version !== 2) {
+    return DEFAULT_STUDIO_SETTINGS;
+  }
+  return {
+    ...DEFAULT_STUDIO_SETTINGS,
+    ...((value as { settings?: Partial<StudioSettings> }).settings ?? {}),
+  };
+}
