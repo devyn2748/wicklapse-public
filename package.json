@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "build": "wxt build",
+    "build": "wxt build && node scripts/sync-unpacked.mjs",
     "zip": "wxt zip",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
