@@ -40,7 +40,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Compact-row validation, malformed-row isolation, signature deduplication, and chronological normalization
 - Optional Solana wallet/RPC fallback in Advanced
 - In-page Instant Export and full-tab Advanced Workstation
-- Square-first cinematic replay with event impacts, live P&L, playhead, ATH treatment, and final summary
+- Social-first cinematic replay with oversized live P&L, full-frame neon price action, animated impact bursts, exact buy/sell labels, honest peak/ATH treatment, and dense final stats
 - GeckoTerminal OHLCV enrichment when the captured pool and history are available
 - SOL/USD presentation
 - Local canvas preview and video export
@@ -50,6 +50,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Exact executions depend on the signed-in Axiom session and the stability of `transactions-feed-v4`; the replay UI is isolated from its compact array indexes.
 - Token symbol, mint, image, and optional P&L summary still come from the active Axiom coin page. Chart DOM data is not read.
 - Market candles use GeckoTerminal when the captured Axiom pool resolves; otherwise the renderer uses the captured trade points and labels them accordingly.
+- Until the dedicated historical OHLC phase lands, sparse replays are explicitly labelled **Execution Price Path** rather than presenting interpolated fills as full market history.
 - USD display uses the current SOL/USD rate rather than the historical rate at each fill.
 - Custom Advanced backgrounds currently accept images; custom video backgrounds are planned next.
 - Export uses MP4/H.264 when the browser exposes that encoder and otherwise downloads WebM/VP9.
