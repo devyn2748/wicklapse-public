@@ -42,6 +42,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - In-page Instant Export and full-tab Advanced Workstation
 - Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
 - Adaptive GeckoTerminal OHLCV history using real quote-token candles, TradingView-style bodies/wicks, volume, price scale, and grid
+- Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
 - Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
 - SOL/USD presentation
 - Local canvas preview and video export

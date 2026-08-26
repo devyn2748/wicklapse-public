@@ -658,8 +658,14 @@ function drawLandscapeReplayFrame(
     ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)
     : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
+  const interval = candles.length > 1
+    ? Math.max(60, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
+    : Math.max(60, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
   const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
-  const chartEnd = Math.max(spec.episode.endTimestamp, candles.at(-1)?.timestamp ?? points.at(-1)!.timestamp);
+  const chartEnd = Math.max(
+    spec.episode.endTimestamp,
+    candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)!.timestamp,
+  );
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = easeOut(phase(progress, 0, 0.08));
   // Move quickly enough to feel active in a short social clip, then hold the completed trade.
@@ -759,16 +765,27 @@ function drawLandscapeReplayFrame(
   context.lineWidth = 1.5 * unit;
   context.stroke();
 
-  const interval = candles.length > 1
-    ? Math.max(60, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
-    : Math.max(60, Math.round(chartSpan / 60));
   context.fillStyle = theme.text;
   context.font = `bold ${27 * unit}px ui-monospace, SFMono-Regular, monospace`;
   context.fillText(`PRICE / SOL  ·  ${candleIntervalLabel(interval)} CANDLES`, chartX + 34 * unit, chartY + 52 * unit);
 
-  const priceValues = candles.length
-    ? candles.flatMap((candle) => [Number(candle.lowSol), Number(candle.highSol)])
-    : points.map((point) => Number(point.priceSol));
+  const animatedCandles = candles.flatMap((candle, index) => {
+    if (candle.timestamp > activeTimestamp) return [];
+    const nextTimestamp = candles[index + 1]?.timestamp ?? chartEnd;
+    const local = clamp((activeTimestamp - candle.timestamp) / Math.max(1, nextTimestamp - candle.timestamp));
+    const wickProgress = easeOut(local);
+    const bodyProgress = easeInOut(clamp(local / 0.88));
+    const open = Number(candle.openSol);
+    const high = open + (Number(candle.highSol) - open) * wickProgress;
+    const low = open + (Number(candle.lowSol) - open) * wickProgress;
+    const close = open + (Number(candle.closeSol) - open) * bodyProgress;
+    if (![open, high, low, close].every(Number.isFinite)) return [];
+    return [{ ...candle, open, high, low, close, local }];
+  });
+  const visiblePoints = points.filter((point) => point.timestamp <= activeTimestamp);
+  const priceValues = animatedCandles.length
+    ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
+    : visiblePoints.map((point) => Number(point.priceSol));
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
@@ -786,7 +803,13 @@ function drawLandscapeReplayFrame(
   const plotY = chartY + 82 * unit;
   const plotWidth = chartWidth - 118 * unit;
   const plotHeight = chartHeight - 132 * unit;
-  const xForTime = (timestamp: number) => plotX + clamp((timestamp - chartStart) / chartSpan) * plotWidth;
+  const displayStart = chartStart - interval * 0.35;
+  const displayEnd = Math.min(
+    chartEnd + interval * 0.35,
+    Math.max(activeTimestamp + interval * 0.65, chartStart + interval * 3.5),
+  );
+  const displaySpan = Math.max(interval, displayEnd - displayStart);
+  const xForTime = (timestamp: number) => plotX + clamp((timestamp - displayStart) / displaySpan) * plotWidth;
   const yForPrice = (price: number) => plotY + (1 - clamp((price - minimum) / (maximum - minimum))) * plotHeight;
 
   context.save();
@@ -805,17 +828,16 @@ function drawLandscapeReplayFrame(
 
   let headX = plotX;
   let headY = yForPrice(active.price);
-  if (candles.length) {
-    const candleSpacing = plotWidth / Math.max(1, candles.length - 1);
-    const bodyWidth = clamp(candleSpacing * 0.62, 3.5 * unit, 13 * unit);
-    const maximumVolume = Math.max(1, ...candles.map((candle) => Number(candle.volume)).filter(Number.isFinite));
+  if (animatedCandles.length) {
+    const visibleBarCount = Math.max(3.5, displaySpan / interval);
+    const candleSpacing = plotWidth / visibleBarCount;
+    const bodyWidth = clamp(candleSpacing * 0.64, 4 * unit, 18 * unit);
+    const maximumVolume = Math.max(1, ...animatedCandles.map((candle) => Number(candle.volume) * candle.local).filter(Number.isFinite));
     const volumeHeight = plotHeight * 0.16;
-    for (const candle of candles) {
-      const candleAt = (candle.timestamp - chartStart) / chartSpan;
-      if (candleAt > chartReveal) continue;
+    for (const candle of animatedCandles) {
       const x = xForTime(candle.timestamp);
-      const volume = Math.max(0, Number(candle.volume));
-      const rising = Number(candle.closeSol) >= Number(candle.openSol);
+      const volume = Math.max(0, Number(candle.volume) * candle.local);
+      const rising = candle.close >= candle.open;
       context.fillStyle = `${rising ? theme.positive : theme.negative}24`;
       context.fillRect(
         x - bodyWidth / 2,
@@ -824,30 +846,28 @@ function drawLandscapeReplayFrame(
         (volume / maximumVolume) * volumeHeight,
       );
     }
-    for (const candle of candles) {
-      const candleAt = (candle.timestamp - chartStart) / chartSpan;
-      if (candleAt > chartReveal) continue;
-      const open = Number(candle.openSol);
-      const high = Number(candle.highSol);
-      const low = Number(candle.lowSol);
-      const close = Number(candle.closeSol);
-      if (![open, high, low, close].every(Number.isFinite)) continue;
+    for (const candle of animatedCandles) {
       const x = xForTime(candle.timestamp);
-      const rising = close >= open;
+      const rising = candle.close >= candle.open;
       const color = rising ? theme.positive : theme.negative;
       context.strokeStyle = `${color}cc`;
-      context.lineWidth = 2.2 * unit;
-      context.beginPath(); context.moveTo(x, yForPrice(high)); context.lineTo(x, yForPrice(low)); context.stroke();
-      const bodyTop = Math.min(yForPrice(open), yForPrice(close));
-      const bodyHeight = Math.max(3 * unit, Math.abs(yForPrice(open) - yForPrice(close)));
+      context.lineWidth = (2.2 + 1.2 * candle.local) * unit;
+      context.shadowColor = color;
+      context.shadowBlur = candle.local < 1 ? (1 - candle.local) * 20 * unit : 0;
+      context.beginPath();
+      context.moveTo(x, yForPrice(candle.high));
+      context.lineTo(x, yForPrice(candle.low));
+      context.stroke();
+      context.shadowBlur = 0;
+      const bodyTop = Math.min(yForPrice(candle.open), yForPrice(candle.close));
+      const bodyHeight = Math.max(3 * unit, Math.abs(yForPrice(candle.open) - yForPrice(candle.close)));
       context.fillStyle = rising ? `${color}de` : `${color}c8`;
       context.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
       headX = x;
-      headY = yForPrice(close);
+      headY = yForPrice(candle.close);
     }
   } else {
-    const visible = points
-      .filter((point) => point.timestamp <= activeTimestamp)
+    const visible = visiblePoints
       .map((point) => ({ x: xForTime(point.timestamp), y: yForPrice(Number(point.priceSol)), at: 0 }));
     if (visible.length === 1) visible.push({ x: plotX + 1, y: visible[0]!.y, at: 0 });
     if (visible.length) {
