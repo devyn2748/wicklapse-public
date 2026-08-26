@@ -59,7 +59,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
 
   return (
     <div className="wick-preview">
-      <canvas ref={canvasRef} width={720} height={720} />
+      <canvas ref={canvasRef} width={960} height={540} />
       <div className="wick-playback">
         <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={() => {
           if (progress >= 1) setProgress(0);
@@ -136,7 +136,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     void loadStudioSettings()
       .then((savedSettings) => {
         if (!active) return;
-        setSettings({ ...savedSettings, width: 1080, height: 1080 });
+        setSettings({ ...savedSettings, width: 1920, height: 1080 });
         void buildCapturedReplay();
       })
       .catch(() => {
@@ -167,7 +167,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         theme: settings.theme,
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
-        width: 1080,
+        width: 1920,
         height: 1080,
         fps: 30,
       };
@@ -210,7 +210,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open wallet settings</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
-          <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>1:1 FEED · 1080 × 1080</b></div><Preview spec={spec} settings={settings} /></section>
+          <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>16:9 X POST · 1920 × 1080</b></div><Preview spec={spec} settings={settings} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Visual theme</h3><span>Wicklapse</span></div><div className="wick-themes">{(["obsidian", "neon", "minimal"] as ThemeName[]).map((theme) => <button type="button" className={settings.theme === theme ? "is-selected" : ""} key={theme} onClick={() => patch("theme", theme)}><i className={theme} />{theme}</button>)}</div></div>

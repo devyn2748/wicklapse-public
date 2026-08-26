@@ -19,8 +19,8 @@ Instant Export sends the current `/meme/{pairAddress}` and the saved public trad
 2. Confirm the Wicklapse entry appears once and does not interfere with Axiom's controls.
 3. Save one or more public Axiom trading wallets in Advanced, separated by commas, then return to the coin page.
 4. Confirm Instant Export opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill.
-5. Preview the default 1:1 replay at several durations, themes, currencies, and buy/sell sounds.
-6. Export the video and verify its duration, square dimensions, audio timing, chart playhead, ATH badge, and buy/sell markers.
+5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and buy/sell sounds.
+6. Export the video and verify its duration, 1920×1080 dimensions, audio timing, chart playhead, ATH badge, and buy/sell markers.
 7. Open Advanced and test 1:1, 9:16, 4:5, 16:9, custom dimensions, wallet visibility, value precision, a background image, and uploaded music.
 8. Close and reopen Wicklapse to confirm the Axiom-first Instant flow remains available.
 

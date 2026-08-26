@@ -307,6 +307,334 @@ function drawMetric(
   context.fillText(value, x + 16 * unit, y + 51 * unit);
 }
 
+function drawLandscapeReplayFrame(
+  context: CanvasRenderingContext2D,
+  spec: ReplaySpec,
+  config: RenderConfig,
+  progress: number,
+  theme: Theme,
+): void {
+  const { width, height } = config;
+  const unit = height / 1080;
+  const margin = 58 * unit;
+  const points = spec.points.length
+    ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)
+    : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
+  const intro = easeOut(phase(progress, 0, 0.1));
+  const chartReveal = easeInOut(phase(progress, 0.07, 0.8));
+  const active = interpolateReplay(points, spec, chartReveal);
+  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
+  const soldSol = new Decimal(spec.episode.totalSoldLamports).div(1_000_000_000);
+  const finalPnlSol = new Decimal(spec.episode.approximatePnlLamports).div(1_000_000_000);
+  const activeValue = currencyValue(active.pnl, spec, config.currency);
+  const roi = boughtSol.isZero() ? new Decimal(0) : active.pnl.div(boughtSol).mul(100);
+  const returnMultiple = boughtSol.isZero() ? new Decimal(0) : active.pnl.plus(boughtSol).div(boughtSol);
+  const outcomeColor = activeValue.gte(0) ? theme.positive : theme.negative;
+
+  context.save();
+  context.textAlign = "left";
+  context.clearRect(0, 0, width, height);
+  drawBackground(context, width, height, theme, config.backgroundImage, progress);
+  drawBrand(context, theme, margin, width, unit, intro);
+
+  const leftX = margin;
+  const leftWidth = 590 * unit;
+  const chartX = leftX + leftWidth + 48 * unit;
+  const chartY = 118 * unit;
+  const chartWidth = width - chartX - margin;
+  const chartHeight = 820 * unit;
+  const heroSlide = (1 - intro) * 35 * unit;
+
+  context.globalAlpha = intro;
+  context.fillStyle = theme.muted;
+  context.font = `bold ${21 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(spec.episode.status === "closed" ? "NET REALIZED P&L" : "LIVE POSITION P&L", leftX, 154 * unit + heroSlide);
+  const resultText = formatMoney(activeValue, config.currency, config.exactValues);
+  let resultFont = resultText.length > 15 ? 116 : resultText.length > 11 ? 134 : 154;
+  context.font = `bold ${resultFont * unit}px sans-serif`;
+  while (resultFont > 92 && context.measureText(resultText).width > leftWidth) {
+    resultFont -= 2;
+    context.font = `bold ${resultFont * unit}px sans-serif`;
+  }
+  context.fillStyle = outcomeColor;
+  context.shadowColor = outcomeColor;
+  context.shadowBlur = 46 * unit;
+  context.fillText(resultText, leftX, 300 * unit + heroSlide);
+  context.shadowBlur = 0;
+
+  const roiText = `${roi.isPositive() ? "+" : ""}${roi.toFixed(config.exactValues ? 2 : 0)}%`;
+  const roiWidth = drawPill(context, roiText, leftX, 332 * unit + heroSlide, {
+    fill: `${outcomeColor}1d`, stroke: `${outcomeColor}aa`, color: outcomeColor,
+    fontSize: 25 * unit, paddingX: 21 * unit,
+  });
+  context.fillStyle = theme.text;
+  context.font = `bold ${29 * unit}px sans-serif`;
+  context.fillText(`${returnMultiple.toFixed(1)}× RETURN`, leftX + roiWidth + 20 * unit, 370 * unit + heroSlide);
+  context.globalAlpha = 1;
+
+  // Entry/exit values are intentionally large enough to survive X's mobile downscale.
+  const splitWidth = (leftWidth - 18 * unit) / 2;
+  const valueY = 408 * unit;
+  [["FROM", boughtSol, false], ["TO", soldSol, true]].forEach(([label, value, emphasis], index) => {
+    const x = leftX + index * (splitWidth + 18 * unit);
+    roundedRect(context, x, valueY, splitWidth, 94 * unit, 16 * unit);
+    context.fillStyle = emphasis ? `${theme.positive}10` : theme.panel;
+    context.fill();
+    context.strokeStyle = emphasis ? `${theme.positive}55` : theme.border;
+    context.stroke();
+    context.fillStyle = theme.muted;
+    context.font = `bold ${15 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.fillText(String(label), x + 18 * unit, valueY + 29 * unit);
+    context.fillStyle = emphasis ? theme.positive : theme.text;
+    context.font = `bold ${29 * unit}px sans-serif`;
+    context.fillText(formatMoney(currencyValue(value as Decimal, spec, config.currency), config.currency, false).replace(/^\+/, ""), x + 18 * unit, valueY + 70 * unit);
+  });
+
+  const identityY = 524 * unit;
+  roundedRect(context, leftX, identityY, leftWidth, 108 * unit, 20 * unit);
+  context.fillStyle = theme.panelStrong;
+  context.fill();
+  context.strokeStyle = theme.border;
+  context.stroke();
+  context.beginPath();
+  context.arc(leftX + 53 * unit, identityY + 54 * unit, 31 * unit, 0, Math.PI * 2);
+  const tokenGradient = context.createLinearGradient(leftX + 20 * unit, identityY + 20 * unit, leftX + 84 * unit, identityY + 84 * unit);
+  tokenGradient.addColorStop(0, theme.positiveSoft);
+  tokenGradient.addColorStop(0.52, theme.positive);
+  tokenGradient.addColorStop(1, theme.negative);
+  context.fillStyle = tokenGradient;
+  context.fill();
+  context.fillStyle = theme.background;
+  context.font = `bold ${19 * unit}px sans-serif`;
+  context.textAlign = "center";
+  context.fillText(spec.symbol.slice(0, 2), leftX + 53 * unit, identityY + 61 * unit);
+  context.textAlign = "left";
+  context.fillStyle = theme.text;
+  context.font = `bold ${41 * unit}px sans-serif`;
+  context.fillText(`$${spec.symbol}`, leftX + 103 * unit, identityY + 53 * unit);
+  context.fillStyle = theme.positive;
+  context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(spec.tradeDataSource === "axiom" ? "AXIOM EXACT FILLS" : "ON-CHAIN FILLS", leftX + 105 * unit, identityY + 82 * unit);
+
+  const statsY = 654 * unit;
+  const statGap = 16 * unit;
+  const statWidth = (leftWidth - statGap) / 2;
+  ([
+    ["EXECUTIONS", `${spec.episode.fills.length}`],
+    ["POSITION", spec.episode.status.toUpperCase()],
+  ] as Array<[string, string]>).forEach(([label, value], index) => {
+    const x = leftX + index * (statWidth + statGap);
+    roundedRect(context, x, statsY, statWidth, 94 * unit, 16 * unit);
+    context.fillStyle = theme.panel;
+    context.fill();
+    context.strokeStyle = theme.border;
+    context.stroke();
+    context.fillStyle = theme.muted;
+    context.font = `bold ${14 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.fillText(label, x + 18 * unit, statsY + 29 * unit);
+    context.fillStyle = theme.text;
+    context.font = `bold ${28 * unit}px sans-serif`;
+    context.fillText(value, x + 18 * unit, statsY + 68 * unit);
+  });
+
+  const summaryIntro = easeOut(phase(progress, 0.76, 0.9));
+  context.globalAlpha = 0.25 + summaryIntro * 0.75;
+  const netY = 770 * unit + (1 - summaryIntro) * 20 * unit;
+  roundedRect(context, leftX, netY, leftWidth, 126 * unit, 20 * unit);
+  context.fillStyle = `${theme.positive}10`;
+  context.fill();
+  context.strokeStyle = `${theme.positive}66`;
+  context.lineWidth = 1.5 * unit;
+  context.stroke();
+  context.fillStyle = theme.muted;
+  context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText("FINAL NET RESULT", leftX + 22 * unit, netY + 37 * unit);
+  context.fillStyle = theme.positive;
+  context.font = `bold ${40 * unit}px sans-serif`;
+  context.fillText(formatMoney(currencyValue(finalPnlSol, spec, config.currency), config.currency, config.exactValues), leftX + 22 * unit, netY + 91 * unit);
+  context.globalAlpha = 1;
+
+  // Right-side chart owns most of the frame and remains readable at feed size.
+  roundedRect(context, chartX, chartY, chartWidth, chartHeight, 28 * unit);
+  context.fillStyle = "rgba(2, 8, 5, .72)";
+  context.fill();
+  context.strokeStyle = theme.border;
+  context.stroke();
+  context.fillStyle = theme.muted;
+  context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(spec.marketDataSource === "ohlcv" ? "PRICE ACTION" : "EXECUTION PRICE PATH", chartX + 28 * unit, chartY + 38 * unit);
+  context.textAlign = "right";
+  context.fillStyle = theme.positive;
+  context.font = `bold ${17 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(`LIVE  ${formatPrice(active.price)}`, chartX + chartWidth - 28 * unit, chartY + 38 * unit);
+  context.textAlign = "left";
+
+  const prices = points.map((point) => Number(point.priceSol)).filter(Number.isFinite);
+  let minimum = Math.min(...prices);
+  let maximum = Math.max(...prices);
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
+  if (minimum === maximum) {
+    minimum -= Math.max(0.000001, Math.abs(minimum) * 0.08);
+    maximum += Math.max(0.000001, Math.abs(maximum) * 0.08);
+  }
+  const pricePadding = (maximum - minimum) * 0.12;
+  minimum -= pricePadding;
+  maximum += pricePadding;
+
+  const plotX = chartX + 28 * unit;
+  const plotY = chartY + 70 * unit;
+  const plotWidth = chartWidth - 102 * unit;
+  const plotHeight = chartHeight - 112 * unit;
+  context.save();
+  roundedRect(context, chartX, chartY, chartWidth, chartHeight, 28 * unit);
+  context.clip();
+  context.strokeStyle = theme.grid;
+  context.lineWidth = Math.max(1, unit);
+  for (let index = 0; index <= 6; index += 1) {
+    const x = plotX + plotWidth * index / 6;
+    context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
+  }
+  for (let index = 0; index <= 5; index += 1) {
+    const y = plotY + plotHeight * index / 5;
+    context.beginPath(); context.moveTo(plotX, y); context.lineTo(plotX + plotWidth, y); context.stroke();
+  }
+
+  let coordinates = points.map((point) => ({
+    x: plotX + pointProgress(point, spec) * plotWidth,
+    y: plotY + (1 - (Number(point.priceSol) - minimum) / (maximum - minimum)) * plotHeight,
+    at: pointProgress(point, spec),
+  }));
+  if (coordinates.length === 1) {
+    const only = coordinates[0]!;
+    coordinates = [{ x: plotX, y: only.y, at: 0 }, { x: plotX + plotWidth, y: only.y, at: 1 }];
+  }
+  const visible = coordinates.filter((point) => point.at <= chartReveal);
+  let head = visible.at(-1) ?? coordinates[0]!;
+  const next = coordinates.find((point) => point.at > chartReveal);
+  if (next && next.at > head.at) {
+    const local = clamp((chartReveal - head.at) / (next.at - head.at));
+    head = { x: head.x + (next.x - head.x) * local, y: head.y + (next.y - head.y) * local, at: chartReveal };
+  }
+  const pathPoints = [...visible];
+  if (!pathPoints.length || pathPoints.at(-1)?.x !== head.x || pathPoints.at(-1)?.y !== head.y) pathPoints.push(head);
+  const area = context.createLinearGradient(0, plotY, 0, plotY + plotHeight);
+  area.addColorStop(0, `${theme.positive}62`);
+  area.addColorStop(0.64, `${theme.positive}18`);
+  area.addColorStop(1, `${theme.positive}00`);
+  context.beginPath();
+  context.moveTo(pathPoints[0]!.x, plotY + plotHeight);
+  traceSmoothPath(context, pathPoints);
+  context.lineTo(head.x, plotY + plotHeight);
+  context.closePath();
+  context.fillStyle = area;
+  context.fill();
+  for (const [lineWidth, alpha, blur] of [[22, "20", 40], [11, "72", 25], [6, "ff", 12]] as const) {
+    context.beginPath();
+    traceSmoothPath(context, pathPoints);
+    context.strokeStyle = `${theme.positive}${alpha}`;
+    context.lineWidth = lineWidth * unit;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.shadowColor = theme.positive;
+    context.shadowBlur = blur * unit;
+    context.stroke();
+  }
+  context.shadowBlur = 0;
+
+  spec.episode.fills.forEach((fill, index) => {
+    const at = eventProgress(fill, spec);
+    if (at > chartReveal) return;
+    const landing = phase(chartReveal, at, Math.min(1, at + 0.075));
+    const point = coordinates.reduce((best, candidate) => Math.abs(candidate.at - at) < Math.abs(best.at - at) ? candidate : best, coordinates[0]!);
+    const color = fill.side === "buy" ? theme.positive : theme.negative;
+    const impact = 1 - landing;
+    context.beginPath();
+    context.arc(point.x, point.y, (11 + impact * 34) * unit, 0, Math.PI * 2);
+    context.strokeStyle = `${color}${impact > 0.4 ? "dd" : "55"}`;
+    context.lineWidth = 3 * unit;
+    context.stroke();
+    context.beginPath();
+    context.arc(point.x, point.y, 9 * unit, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.shadowColor = color;
+    context.shadowBlur = 24 * unit;
+    context.fill();
+    context.shadowBlur = 0;
+    const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
+    const label = `${fill.side.toUpperCase()} ${quote.toDecimalPlaces(3).toString()} SOL`;
+    context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    const labelWidth = context.measureText(label).width + 30 * unit;
+    const labelX = clamp(point.x - labelWidth / 2, chartX + 12 * unit, chartX + chartWidth - labelWidth - 12 * unit);
+    const labelY = clamp(point.y + (index % 2 === 0 ? -58 : 24) * unit, chartY + 50 * unit, chartY + chartHeight - 50 * unit);
+    drawPill(context, label, labelX, labelY, {
+      fill: "rgba(1, 7, 4, .95)", stroke: `${color}aa`, color,
+      fontSize: 16 * unit, paddingX: 15 * unit,
+    });
+  });
+
+  if (chartReveal > 0) {
+    const pulse = 1 + Math.sin(progress * Math.PI * 24) * 0.12;
+    context.beginPath();
+    context.arc(head.x, head.y, 45 * unit * pulse, 0, Math.PI * 2);
+    context.fillStyle = `${theme.positive}16`;
+    context.fill();
+    context.beginPath();
+    context.arc(head.x, head.y, 15 * unit, 0, Math.PI * 2);
+    context.fillStyle = theme.positiveSoft;
+    context.shadowColor = theme.positive;
+    context.shadowBlur = 40 * unit;
+    context.fill();
+    context.shadowBlur = 0;
+    context.setLineDash([10 * unit, 10 * unit]);
+    context.strokeStyle = `${theme.positive}66`;
+    context.beginPath(); context.moveTo(head.x, head.y); context.lineTo(plotX + plotWidth, head.y); context.stroke();
+    context.setLineDash([]);
+  }
+  context.restore();
+
+  context.textAlign = "right";
+  context.fillStyle = theme.muted;
+  context.font = `bold ${14 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  for (let index = 0; index < 4; index += 1) {
+    const ratio = index / 3;
+    context.fillText(formatPrice(maximum - (maximum - minimum) * ratio), chartX + chartWidth - 18 * unit, plotY + 10 * unit + ratio * (plotHeight - 12 * unit));
+  }
+  context.textAlign = "left";
+
+  const peakIndex = prices.indexOf(Math.max(...prices));
+  const peakPoint = coordinates[Math.max(0, peakIndex)];
+  if (peakPoint && chartReveal >= peakPoint.at) {
+    const peakIntro = easeOut(peakPoint.at >= 0.999 ? phase(progress, 0.76, 0.9) : phase(chartReveal, peakPoint.at, Math.min(1, peakPoint.at + 0.1)));
+    context.globalAlpha = peakIntro;
+    const peakLabel = `${spec.marketDataSource === "ohlcv" ? "◆ ATH" : "◆ PEAK EXECUTION"} ${formatPrice(prices[peakIndex] ?? 0)}`;
+    context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    const peakWidth = context.measureText(peakLabel).width + 34 * unit;
+    drawPill(context, peakLabel, clamp(peakPoint.x - peakWidth / 2, chartX + 18 * unit, chartX + chartWidth - peakWidth - 18 * unit), Math.max(chartY + 55 * unit, peakPoint.y - 72 * unit), {
+      fill: "rgba(30, 21, 2, .95)", stroke: `${theme.accent}cc`, color: theme.accent,
+      fontSize: 16 * unit, paddingX: 17 * unit,
+    });
+    context.globalAlpha = 1;
+  }
+
+  const footerY = height - 31 * unit;
+  context.fillStyle = theme.muted;
+  context.font = `bold ${14 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(walletLabel(spec.walletAddress, config.walletVisibility), margin, footerY);
+  context.textAlign = "right";
+  context.fillStyle = theme.positive;
+  context.fillText("FLEX THE TRADE • MADE WITH WICKLAPSE", width - margin, footerY);
+  context.textAlign = "left";
+
+  for (const fill of spec.episode.fills) {
+    const distance = Math.abs(chartReveal - eventProgress(fill, spec));
+    if (distance >= 0.018) continue;
+    const strength = (1 - distance / 0.018) * 0.06;
+    context.fillStyle = fill.side === "buy" ? `rgba(15, 242, 139, ${strength})` : `rgba(255, 62, 120, ${strength})`;
+    context.fillRect(0, 0, width, height);
+  }
+  context.restore();
+}
+
 export function drawReplayFrame(
   context: CanvasRenderingContext2D,
   spec: ReplaySpec,
@@ -317,6 +645,10 @@ export function drawReplayFrame(
   const { width, height } = config;
   const unit = Math.min(width, height) / 1080;
   const theme = THEMES[config.theme];
+  if (width / height >= 1.45) {
+    drawLandscapeReplayFrame(context, spec, config, progress, theme);
+    return;
+  }
   const margin = Math.max(34 * unit, Math.min(width, height) * 0.044);
   const points = spec.points.length
     ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)

@@ -23,14 +23,14 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   sellSound: "confirm",
   exactValues: false,
   walletVisibility: "hidden",
-  width: 1080,
+  width: 1920,
   height: 1080,
   fps: 30,
 };
 
 export const ASPECT_PRESETS = [
+  { label: "16:9", width: 1920, height: 1080 },
   { label: "1:1", width: 1080, height: 1080 },
   { label: "9:16", width: 1080, height: 1920 },
   { label: "4:5", width: 1080, height: 1350 },
-  { label: "16:9", width: 1920, height: 1080 },
 ] as const;
