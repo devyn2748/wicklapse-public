@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { createReplaySpec } from "./replay-project";
+import { buildMarkToMarketPoints, createReplaySpec } from "./replay-project";
 
 const fills: TradeFill[] = [
   {
@@ -71,8 +71,10 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("createReplaySpec", () => {
   it("uses market candles when the captured pool returns enough history", async () => {
+    const requestedUrls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      requestedUrls.push(url);
       if (url.includes("simple/price")) return new Response(JSON.stringify({ solana: { usd: 180 } }), { status: 200 });
       return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
         [1_700_000_240, 2.4, 2.8, 2.3, 2.7, 10],
@@ -84,9 +86,41 @@ describe("createReplaySpec", () => {
 
     const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
     expect(spec.usdPerSol).toBe("180");
-    expect(spec.points).toHaveLength(4);
-    expect(spec.points[0]?.timestamp).toBe(1_700_000_060);
-    expect(spec.points.at(-1)?.priceSol).toBe("2.7");
+    expect(spec.candles).toHaveLength(4);
+    expect(spec.candles?.[0]?.timestamp).toBe(1_700_000_060);
+    expect(spec.candles?.at(-1)?.closeSol).toBe("2.7");
+    expect(spec.points[0]?.pnlSol).toBe("-0.000005");
+    expect(spec.points.at(-1)?.pnlSol).toBe("1.99999");
+    expect(requestedUrls.some((url) => url.includes("/ohlcv/minute?") && url.includes("currency=token"))).toBe(true);
+  });
+
+  it("marks the position to market instead of showing the initial buy as a loss", () => {
+    const points = buildMarkToMarketPoints(episode, [{
+      timestamp: fills[0]!.timestamp,
+      openSol: "1",
+      highSol: "1",
+      lowSol: "1",
+      closeSol: "1",
+      volume: "10",
+    }]);
+    expect(Number(points[0]?.pnlSol)).toBeCloseTo(-0.000005, 9);
+  });
+
+  it("chooses hourly candles for a multi-day trade so the entry is not truncated", async () => {
+    const longEpisode: TradeEpisode = {
+      ...episode,
+      fills: [fills[0]!, { ...fills[1]!, timestamp: fills[0]!.timestamp + 5 * 86_400 }],
+      endTimestamp: fills[0]!.timestamp + 5 * 86_400,
+    };
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [] } } }), { status: 200 });
+    }));
+    await createReplaySpec(longEpisode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
+    expect(requestedUrls.some((url) => url.includes("/ohlcv/hour?") && url.includes("aggregate=1"))).toBe(true);
   });
 
   it("falls back to wallet fills when market history is unavailable", async () => {

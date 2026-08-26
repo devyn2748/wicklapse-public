@@ -95,7 +95,7 @@ function roundedRect(
 }
 
 function formatMoney(value: Decimal, currency: Currency, exact: boolean): string {
-  const sign = value.isPositive() ? "+" : value.isNegative() ? "−" : "";
+  const sign = value.isPositive() ? "+" : value.isNegative() ? "-" : "";
   const absolute = value.abs();
   if (currency === "USD") {
     if (exact) return `${sign}$${absolute.toDecimalPlaces(2).toFixed(2)}`;
@@ -148,14 +148,17 @@ function eventProgress(fill: TradeFill, spec: ReplaySpec): number {
 }
 
 function interpolateReplay(points: ReplayPoint[], spec: ReplaySpec, timeline: number): { price: number; pnl: Decimal } {
+  const timestamp = spec.episode.startTimestamp + timeline * Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp);
+  return interpolateReplayAtTimestamp(points, timestamp);
+}
+
+function interpolateReplayAtTimestamp(points: ReplayPoint[], timestamp: number): { price: number; pnl: Decimal } {
   if (points.length === 1) return { price: Number(points[0]!.priceSol), pnl: new Decimal(points[0]!.pnlSol) };
   for (let index = 1; index < points.length; index += 1) {
     const previous = points[index - 1]!;
     const next = points[index]!;
-    const previousAt = pointProgress(previous, spec);
-    const nextAt = pointProgress(next, spec);
-    if (timeline <= nextAt) {
-      const local = clamp((timeline - previousAt) / Math.max(0.0001, nextAt - previousAt));
+    if (timestamp <= next.timestamp) {
+      const local = clamp((timestamp - previous.timestamp) / Math.max(0.0001, next.timestamp - previous.timestamp));
       const price = Number(previous.priceSol) + (Number(next.priceSol) - Number(previous.priceSol)) * local;
       const pnl = new Decimal(previous.pnlSol).plus(new Decimal(next.pnlSol).minus(previous.pnlSol).mul(local));
       return { price, pnl };
@@ -307,7 +310,7 @@ function drawMetric(
   context.fillText(value, x + 16 * unit, y + 51 * unit);
 }
 
-function drawLandscapeReplayFrame(
+function drawLegacyLandscapeReplayFrame(
   context: CanvasRenderingContext2D,
   spec: ReplaySpec,
   config: RenderConfig,
@@ -632,6 +635,307 @@ function drawLandscapeReplayFrame(
     context.fillStyle = fill.side === "buy" ? `rgba(15, 242, 139, ${strength})` : `rgba(255, 62, 120, ${strength})`;
     context.fillRect(0, 0, width, height);
   }
+  context.restore();
+}
+
+function candleIntervalLabel(seconds: number): string {
+  if (seconds >= 86_400) return `${Math.max(1, Math.round(seconds / 86_400))}D`;
+  if (seconds >= 3_600) return `${Math.max(1, Math.round(seconds / 3_600))}H`;
+  return `${Math.max(1, Math.round(seconds / 60))}M`;
+}
+
+function drawLandscapeReplayFrame(
+  context: CanvasRenderingContext2D,
+  spec: ReplaySpec,
+  config: RenderConfig,
+  progress: number,
+  theme: Theme,
+): void {
+  const { width, height } = config;
+  const unit = height / 1080;
+  const margin = 62 * unit;
+  const points = spec.points.length
+    ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)
+    : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
+  const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
+  const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
+  const chartEnd = Math.max(spec.episode.endTimestamp, candles.at(-1)?.timestamp ?? points.at(-1)!.timestamp);
+  const chartSpan = Math.max(1, chartEnd - chartStart);
+  const intro = easeOut(phase(progress, 0, 0.08));
+  // Move quickly enough to feel active in a short social clip, then hold the completed trade.
+  const chartReveal = easeOut(phase(progress, 0.015, 0.8));
+  const activeTimestamp = chartStart + chartSpan * chartReveal;
+  const active = interpolateReplayAtTimestamp(points, activeTimestamp);
+  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
+  const activeValue = currencyValue(active.pnl, spec, config.currency);
+  const roi = boughtSol.isZero() ? new Decimal(0) : active.pnl.div(boughtSol).mul(100);
+  const returnMultiple = boughtSol.isZero() ? new Decimal(1) : active.pnl.plus(boughtSol).div(boughtSol);
+  const outcomeColor = activeValue.gte(0) ? theme.positive : theme.negative;
+
+  context.save();
+  context.textAlign = "left";
+  context.clearRect(0, 0, width, height);
+  drawBackground(context, width, height, theme, config.backgroundImage, progress);
+
+  // Large, quiet branding—no tiny edge metadata in the social export.
+  context.globalAlpha = intro;
+  roundedRect(context, margin, 42 * unit, 48 * unit, 48 * unit, 13 * unit);
+  context.fillStyle = `${theme.positive}18`;
+  context.fill();
+  context.strokeStyle = `${theme.positive}99`;
+  context.lineWidth = 1.5 * unit;
+  context.stroke();
+  context.fillStyle = theme.positive;
+  context.font = `bold ${28 * unit}px sans-serif`;
+  context.fillText("W", margin + 11 * unit, 76 * unit);
+  context.fillStyle = theme.text;
+  context.font = `bold ${23 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText("WICKLAPSE", margin + 66 * unit, 74 * unit);
+
+  const leftX = margin;
+  const leftWidth = 500 * unit;
+  const chartX = leftX + leftWidth + 46 * unit;
+  const chartY = 72 * unit;
+  const chartWidth = width - chartX - margin;
+  const chartHeight = 924 * unit;
+  const slide = (1 - intro) * 30 * unit;
+
+  context.fillStyle = theme.text;
+  context.font = `bold ${64 * unit}px sans-serif`;
+  const ticker = `$${spec.symbol}`;
+  let tickerFont = 64;
+  while (tickerFont > 42 && context.measureText(ticker).width > leftWidth) {
+    tickerFont -= 2;
+    context.font = `bold ${tickerFont * unit}px sans-serif`;
+  }
+  context.fillText(ticker, leftX, 185 * unit + slide);
+
+  context.fillStyle = theme.muted;
+  context.font = `bold ${24 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText("RUNNING P&L", leftX, 270 * unit + slide);
+  const resultText = formatMoney(activeValue, config.currency, config.exactValues);
+  let resultFont = resultText.length > 15 ? 104 : resultText.length > 11 ? 120 : 140;
+  context.font = `bold ${resultFont * unit}px sans-serif`;
+  while (resultFont > 86 && context.measureText(resultText).width > leftWidth) {
+    resultFont -= 2;
+    context.font = `bold ${resultFont * unit}px sans-serif`;
+  }
+  context.fillStyle = outcomeColor;
+  context.shadowColor = outcomeColor;
+  context.shadowBlur = 42 * unit;
+  context.fillText(resultText, leftX, 407 * unit + slide);
+  context.shadowBlur = 0;
+
+  const roiText = `${roi.isPositive() ? "+" : ""}${roi.toFixed(config.exactValues ? 2 : 0)}%`;
+  const roiWidth = drawPill(context, roiText, leftX, 448 * unit + slide, {
+    fill: `${outcomeColor}1c`, stroke: `${outcomeColor}bb`, color: outcomeColor,
+    fontSize: 31 * unit, paddingX: 25 * unit,
+  });
+  context.fillStyle = theme.text;
+  context.font = `bold ${35 * unit}px sans-serif`;
+  context.fillText(`${returnMultiple.toFixed(1)}×`, leftX + roiWidth + 25 * unit, 494 * unit + slide);
+
+  const buyY = 570 * unit;
+  roundedRect(context, leftX, buyY, leftWidth, 166 * unit, 24 * unit);
+  context.fillStyle = theme.panelStrong;
+  context.fill();
+  context.strokeStyle = `${theme.positive}55`;
+  context.lineWidth = 2 * unit;
+  context.stroke();
+  context.fillStyle = theme.muted;
+  context.font = `bold ${23 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText("INITIAL BUY", leftX + 28 * unit, buyY + 48 * unit);
+  context.fillStyle = theme.text;
+  context.font = `bold ${54 * unit}px sans-serif`;
+  const initialBuyText = formatMoney(currencyValue(boughtSol, spec, config.currency), config.currency, false).replace(/^\+/, "");
+  context.fillText(initialBuyText, leftX + 28 * unit, buyY + 119 * unit);
+  context.globalAlpha = 1;
+
+  // Real trading-chart treatment: OHLC candles where available, angular execution path otherwise.
+  roundedRect(context, chartX, chartY, chartWidth, chartHeight, 28 * unit);
+  context.fillStyle = "rgba(2, 8, 5, .78)";
+  context.fill();
+  context.strokeStyle = theme.border;
+  context.lineWidth = 1.5 * unit;
+  context.stroke();
+
+  const interval = candles.length > 1
+    ? Math.max(60, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
+    : Math.max(60, Math.round(chartSpan / 60));
+  context.fillStyle = theme.text;
+  context.font = `bold ${27 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  context.fillText(`PRICE / SOL  ·  ${candleIntervalLabel(interval)} CANDLES`, chartX + 34 * unit, chartY + 52 * unit);
+
+  const priceValues = candles.length
+    ? candles.flatMap((candle) => [Number(candle.lowSol), Number(candle.highSol)])
+    : points.map((point) => Number(point.priceSol));
+  let minimum = Math.min(...priceValues.filter(Number.isFinite));
+  let maximum = Math.max(...priceValues.filter(Number.isFinite));
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
+  if (minimum === maximum) {
+    const padding = Math.max(0.000001, Math.abs(minimum) * 0.08);
+    minimum -= padding;
+    maximum += padding;
+  } else {
+    const padding = (maximum - minimum) * 0.08;
+    minimum -= padding;
+    maximum += padding;
+  }
+
+  const plotX = chartX + 34 * unit;
+  const plotY = chartY + 82 * unit;
+  const plotWidth = chartWidth - 118 * unit;
+  const plotHeight = chartHeight - 132 * unit;
+  const xForTime = (timestamp: number) => plotX + clamp((timestamp - chartStart) / chartSpan) * plotWidth;
+  const yForPrice = (price: number) => plotY + (1 - clamp((price - minimum) / (maximum - minimum))) * plotHeight;
+
+  context.save();
+  roundedRect(context, chartX, chartY, chartWidth, chartHeight, 28 * unit);
+  context.clip();
+  context.strokeStyle = theme.grid;
+  context.lineWidth = Math.max(1, unit);
+  for (let index = 0; index <= 6; index += 1) {
+    const x = plotX + plotWidth * index / 6;
+    context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
+  }
+  for (let index = 0; index <= 4; index += 1) {
+    const y = plotY + plotHeight * index / 4;
+    context.beginPath(); context.moveTo(plotX, y); context.lineTo(plotX + plotWidth, y); context.stroke();
+  }
+
+  let headX = plotX;
+  let headY = yForPrice(active.price);
+  if (candles.length) {
+    const candleSpacing = plotWidth / Math.max(1, candles.length - 1);
+    const bodyWidth = clamp(candleSpacing * 0.62, 3.5 * unit, 13 * unit);
+    const maximumVolume = Math.max(1, ...candles.map((candle) => Number(candle.volume)).filter(Number.isFinite));
+    const volumeHeight = plotHeight * 0.16;
+    for (const candle of candles) {
+      const candleAt = (candle.timestamp - chartStart) / chartSpan;
+      if (candleAt > chartReveal) continue;
+      const x = xForTime(candle.timestamp);
+      const volume = Math.max(0, Number(candle.volume));
+      const rising = Number(candle.closeSol) >= Number(candle.openSol);
+      context.fillStyle = `${rising ? theme.positive : theme.negative}24`;
+      context.fillRect(
+        x - bodyWidth / 2,
+        plotY + plotHeight - (volume / maximumVolume) * volumeHeight,
+        bodyWidth,
+        (volume / maximumVolume) * volumeHeight,
+      );
+    }
+    for (const candle of candles) {
+      const candleAt = (candle.timestamp - chartStart) / chartSpan;
+      if (candleAt > chartReveal) continue;
+      const open = Number(candle.openSol);
+      const high = Number(candle.highSol);
+      const low = Number(candle.lowSol);
+      const close = Number(candle.closeSol);
+      if (![open, high, low, close].every(Number.isFinite)) continue;
+      const x = xForTime(candle.timestamp);
+      const rising = close >= open;
+      const color = rising ? theme.positive : theme.negative;
+      context.strokeStyle = `${color}cc`;
+      context.lineWidth = 2.2 * unit;
+      context.beginPath(); context.moveTo(x, yForPrice(high)); context.lineTo(x, yForPrice(low)); context.stroke();
+      const bodyTop = Math.min(yForPrice(open), yForPrice(close));
+      const bodyHeight = Math.max(3 * unit, Math.abs(yForPrice(open) - yForPrice(close)));
+      context.fillStyle = rising ? `${color}de` : `${color}c8`;
+      context.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
+      headX = x;
+      headY = yForPrice(close);
+    }
+  } else {
+    const visible = points
+      .filter((point) => point.timestamp <= activeTimestamp)
+      .map((point) => ({ x: xForTime(point.timestamp), y: yForPrice(Number(point.priceSol)), at: 0 }));
+    if (visible.length === 1) visible.push({ x: plotX + 1, y: visible[0]!.y, at: 0 });
+    if (visible.length) {
+      context.beginPath();
+      context.moveTo(visible[0]!.x, visible[0]!.y);
+      visible.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+      context.strokeStyle = theme.positive;
+      context.lineWidth = 6 * unit;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.shadowColor = theme.positive;
+      context.shadowBlur = 18 * unit;
+      context.stroke();
+      context.shadowBlur = 0;
+      headX = visible.at(-1)!.x;
+      headY = visible.at(-1)!.y;
+    }
+  }
+
+  // Merge executions landing in the same candle so markers stay large and readable.
+  const markerWindow = Math.max(2, interval);
+  const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
+  for (const fill of spec.episode.fills) {
+    const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
+    const price = new Decimal(fill.estimatedPriceSol || 0);
+    const previous = markers.at(-1);
+    if (previous && previous.side === fill.side && fill.timestamp - previous.timestamp <= markerWindow) {
+      previous.weightedPrice = previous.weightedPrice.mul(previous.quote).plus(price.mul(quote)).div(previous.quote.plus(quote));
+      previous.quote = previous.quote.plus(quote);
+    } else markers.push({ timestamp: fill.timestamp, side: fill.side, quote, weightedPrice: price });
+  }
+  markers.forEach((marker, index) => {
+    if (marker.timestamp > activeTimestamp) return;
+    const x = xForTime(marker.timestamp);
+    const y = yForPrice(marker.weightedPrice.toNumber());
+    const color = marker.side === "buy" ? theme.positive : theme.negative;
+    context.setLineDash([8 * unit, 8 * unit]);
+    context.strokeStyle = `${color}55`;
+    context.lineWidth = 2 * unit;
+    context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
+    context.setLineDash([]);
+    context.beginPath();
+    context.arc(x, y, 15 * unit, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.shadowColor = color;
+    context.shadowBlur = 28 * unit;
+    context.fill();
+    context.shadowBlur = 0;
+    context.beginPath();
+    context.arc(x, y, 6 * unit, 0, Math.PI * 2);
+    context.fillStyle = theme.background;
+    context.fill();
+    const label = `${marker.side.toUpperCase()} ${marker.quote.toDecimalPlaces(3).toString()} SOL`;
+    context.font = `bold ${25 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    const labelWidth = context.measureText(label).width + 40 * unit;
+    const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);
+    const above = marker.side === "buy" ? index % 2 === 0 : index % 2 !== 0;
+    const labelY = clamp(y + (above ? -72 : 35) * unit, chartY + 62 * unit, chartY + chartHeight - 66 * unit);
+    drawPill(context, label, labelX, labelY, {
+      fill: "rgba(1, 7, 4, .96)", stroke: `${color}dd`, color,
+      fontSize: 25 * unit, paddingX: 20 * unit,
+    });
+  });
+
+  if (chartReveal > 0) {
+    context.setLineDash([10 * unit, 9 * unit]);
+    context.strokeStyle = `${outcomeColor}66`;
+    context.lineWidth = 2 * unit;
+    context.beginPath(); context.moveTo(headX, headY); context.lineTo(plotX + plotWidth, headY); context.stroke();
+    context.setLineDash([]);
+    context.beginPath();
+    context.arc(headX, headY, 11 * unit, 0, Math.PI * 2);
+    context.fillStyle = outcomeColor;
+    context.shadowColor = outcomeColor;
+    context.shadowBlur = 22 * unit;
+    context.fill();
+    context.shadowBlur = 0;
+  }
+  context.restore();
+
+  context.textAlign = "right";
+  context.fillStyle = theme.muted;
+  context.font = `bold ${26 * unit}px ui-monospace, SFMono-Regular, monospace`;
+  for (let index = 0; index < 3; index += 1) {
+    const ratio = index / 2;
+    context.fillText(formatPrice(maximum - (maximum - minimum) * ratio), chartX + chartWidth - 20 * unit, plotY + 8 * unit + ratio * (plotHeight - 8 * unit));
+  }
+  context.textAlign = "left";
   context.restore();
 }
 

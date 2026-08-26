@@ -94,16 +94,25 @@ export function buildTradeEpisodes(fills: TradeFill[], context: ShareContext): T
 
 export function buildReplayPoints(episode: TradeEpisode): ReplayPoint[] {
   const points: ReplayPoint[] = [];
-  let spent = new Decimal(0);
-  let received = new Decimal(0);
+  let cashFlow = new Decimal(0);
+  let holdings = new Decimal(0);
+  let fees = new Decimal(0);
   for (const fill of episode.fills) {
     const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
-    if (fill.side === "buy") spent = spent.plus(quote);
-    else received = received.plus(quote);
+    const tokenAmount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
+    if (fill.side === "buy") {
+      cashFlow = cashFlow.minus(quote);
+      holdings = holdings.plus(tokenAmount);
+    } else {
+      cashFlow = cashFlow.plus(quote);
+      holdings = Decimal.max(0, holdings.minus(tokenAmount));
+    }
+    fees = fees.plus(new Decimal(fill.networkFeeLamports).div(LAMPORTS));
+    const executionPrice = new Decimal(fill.estimatedPriceSol || 0);
     points.push({
       timestamp: fill.timestamp,
       priceSol: fill.estimatedPriceSol,
-      pnlSol: received.minus(spent).toString(),
+      pnlSol: cashFlow.plus(holdings.mul(executionPrice)).minus(fees).toString(),
     });
   }
   return points;

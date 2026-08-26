@@ -130,6 +130,15 @@ export interface ReplayPoint {
   pnlSol: string;
 }
 
+export interface ReplayCandle {
+  timestamp: number;
+  openSol: string;
+  highSol: string;
+  lowSol: string;
+  closeSol: string;
+  volume: string;
+}
+
 export interface ReplaySpec {
   id: string;
   symbol: string;
@@ -139,6 +148,7 @@ export interface ReplaySpec {
   capturedAt: number;
   episode: TradeEpisode;
   points: ReplayPoint[];
+  candles?: ReplayCandle[];
   currency: Currency;
   usdPerSol: string | null;
   verified: boolean;

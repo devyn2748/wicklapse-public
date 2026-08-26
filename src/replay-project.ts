@@ -1,25 +1,69 @@
 import Decimal from "decimal.js";
-import type { ReplayPoint, ReplaySpec, ShareContext, TradeEpisode } from "./domain";
+import type { ReplayCandle, ReplayPoint, ReplaySpec, ShareContext, TradeEpisode } from "./domain";
 import { buildReplayPoints } from "./episodes";
 
 interface OhlcvPayload {
   data?: { attributes?: { ohlcv_list?: Array<[number, number, number, number, number, number]> } };
 }
 
-function interpolatePnl(points: ReplayPoint[], timestamp: number): string {
-  if (!points.length) return "0";
-  if (timestamp <= points[0]!.timestamp) return points[0]!.pnlSol;
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!;
-    const next = points[index]!;
-    if (timestamp <= next.timestamp) {
-      const ratio = (timestamp - previous.timestamp) / Math.max(1, next.timestamp - previous.timestamp);
-      return new Decimal(previous.pnlSol)
-        .plus(new Decimal(next.pnlSol).minus(previous.pnlSol).mul(ratio))
-        .toString();
+interface MarketHistory {
+  candles: ReplayCandle[];
+  points: ReplayPoint[];
+}
+
+const LAMPORTS = new Decimal(1_000_000_000);
+
+function selectCandleRequest(spanSeconds: number): { timeframe: "minute" | "hour" | "day"; aggregate: number; interval: number } {
+  if (spanSeconds <= 3 * 3_600) return { timeframe: "minute", aggregate: 1, interval: 60 };
+  if (spanSeconds <= 15 * 3_600) return { timeframe: "minute", aggregate: 5, interval: 300 };
+  if (spanSeconds <= 2 * 86_400) return { timeframe: "minute", aggregate: 15, interval: 900 };
+  if (spanSeconds <= 30 * 86_400) return { timeframe: "hour", aggregate: 1, interval: 3_600 };
+  if (spanSeconds <= 120 * 86_400) return { timeframe: "hour", aggregate: 4, interval: 14_400 };
+  if (spanSeconds <= 365 * 86_400) return { timeframe: "hour", aggregate: 12, interval: 43_200 };
+  return { timeframe: "day", aggregate: 1, interval: 86_400 };
+}
+
+function isFiniteCandle(row: unknown): row is [number, number, number, number, number, number] {
+  return Array.isArray(row)
+    && row.length >= 6
+    && row.slice(0, 6).every((value) => Number.isFinite(Number(value)))
+    && Number(row[0]) > 0
+    && Number(row[2]) >= Number(row[3]);
+}
+
+export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCandle[]): ReplayPoint[] {
+  const timeline = [
+    ...candles.map((candle) => ({ timestamp: candle.timestamp, priceSol: candle.closeSol, order: 0 })),
+    ...episode.fills.map((fill) => ({ timestamp: fill.timestamp, priceSol: fill.estimatedPriceSol, order: 1 })),
+  ].sort((left, right) => left.timestamp - right.timestamp || left.order - right.order);
+  let fillIndex = 0;
+  let cashFlow = new Decimal(0);
+  let holdings = new Decimal(0);
+  let fees = new Decimal(0);
+  const points: ReplayPoint[] = [];
+  for (const item of timeline) {
+    while (fillIndex < episode.fills.length && episode.fills[fillIndex]!.timestamp <= item.timestamp) {
+      const fill = episode.fills[fillIndex]!;
+      const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
+      const amount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
+      if (fill.side === "buy") {
+        cashFlow = cashFlow.minus(quote);
+        holdings = holdings.plus(amount);
+      } else {
+        cashFlow = cashFlow.plus(quote);
+        holdings = Decimal.max(0, holdings.minus(amount));
+      }
+      fees = fees.plus(new Decimal(fill.networkFeeLamports).div(LAMPORTS));
+      fillIndex += 1;
     }
+    const price = new Decimal(item.priceSol || 0);
+    points.push({
+      timestamp: item.timestamp,
+      priceSol: price.toString(),
+      pnlSol: cashFlow.plus(holdings.mul(price)).minus(fees).toString(),
+    });
   }
-  return points.at(-1)!.pnlSol;
+  return points.filter((point, index) => index === 0 || point.timestamp !== points[index - 1]!.timestamp);
 }
 
 async function getUsdPerSol(): Promise<string | null> {
@@ -33,39 +77,43 @@ async function getUsdPerSol(): Promise<string | null> {
   }
 }
 
-async function getMarketReplayPoints(
+async function getMarketHistory(
   context: ShareContext,
   episode: TradeEpisode,
-  fillPoints: ReplayPoint[],
-): Promise<ReplayPoint[] | null> {
+): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
-  const before = episode.endTimestamp + 120;
-  const spanMinutes = Math.max(1, Math.ceil((episode.endTimestamp - episode.startTimestamp) / 60));
-  const limit = Math.min(1_000, Math.max(40, spanMinutes + 6));
+  const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  const request = selectCandleRequest(spanSeconds);
+  const before = episode.endTimestamp + request.interval * 2;
+  const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.interval) + 4));
   const params = new URLSearchParams({
-    aggregate: "1",
+    aggregate: String(request.aggregate),
     before_timestamp: String(before),
     limit: String(limit),
-    currency: "usd",
+    currency: "token",
     token: "base",
   });
   try {
     const response = await fetch(
-      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}/ohlcv/minute?${params}`,
+      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}/ohlcv/${request.timeframe}?${params}`,
       { headers: { accept: "application/json;version=20230203" } },
     );
     if (!response.ok) return null;
     const payload = (await response.json()) as OhlcvPayload;
-    const candles = payload.data?.attributes?.ohlcv_list ?? [];
-    const points = candles
-      .filter(([timestamp]) => timestamp >= episode.startTimestamp - 120 && timestamp <= episode.endTimestamp + 120)
-      .map(([timestamp, , , , close]) => ({
-        timestamp,
-        priceSol: String(close),
-        pnlSol: interpolatePnl(fillPoints, timestamp),
+    const candles = (payload.data?.attributes?.ohlcv_list ?? [])
+      .filter(isFiniteCandle)
+      .filter(([timestamp]) => timestamp >= episode.startTimestamp - request.interval && timestamp <= episode.endTimestamp + request.interval)
+      .map(([timestamp, open, high, low, close, volume]): ReplayCandle => ({
+        timestamp: Number(timestamp),
+        openSol: String(open),
+        highSol: String(high),
+        lowSol: String(low),
+        closeSol: String(close),
+        volume: String(volume),
       }))
       .sort((a, b) => a.timestamp - b.timestamp);
-    return points.length >= 4 ? points : null;
+    if (candles.length < 4) return null;
+    return { candles, points: buildMarkToMarketPoints(episode, candles) };
   } catch {
     return null;
   }
@@ -78,9 +126,9 @@ export async function createReplaySpec(
 ): Promise<ReplaySpec> {
   const fillPoints = buildReplayPoints(episode);
   const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
-  const [usdPerSol, marketPoints] = await Promise.all([
+  const [usdPerSol, marketHistory] = await Promise.all([
     getUsdPerSol(),
-    getMarketReplayPoints(context, episode, fillPoints),
+    getMarketHistory(context, episode),
   ]);
   return {
     id: crypto.randomUUID(),
@@ -90,11 +138,12 @@ export async function createReplaySpec(
     walletAddresses: context.walletAddresses,
     capturedAt: context.capturedAt,
     episode,
-    points: marketPoints ?? fillPoints,
+    points: marketHistory?.points ?? fillPoints,
+    candles: marketHistory?.candles,
     currency: "SOL",
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,
-    marketDataSource: marketPoints ? "ohlcv" : "fills",
+    marketDataSource: marketHistory ? "ohlcv" : "fills",
     tradeDataSource,
   };
 }
