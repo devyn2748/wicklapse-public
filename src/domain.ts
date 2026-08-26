@@ -149,6 +149,8 @@ export interface ReplaySpec {
   episode: TradeEpisode;
   points: ReplayPoint[];
   candles?: ReplayCandle[];
+  /** Multiply a candle's SOL-denominated token price by this value to obtain USD market cap. */
+  marketCapMultiplier?: string | null;
   currency: Currency;
   usdPerSol: string | null;
   verified: boolean;

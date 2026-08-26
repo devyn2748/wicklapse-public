@@ -13,6 +13,9 @@ export interface RenderConfig {
   width: number;
   height: number;
   fps?: 30 | 60;
+  chartMetric?: "marketCap" | "price";
+  marketCapFormat?: "auto" | "thousands" | "millions";
+  marketCapThreshold?: number;
   backgroundImage?: CanvasImageSource | null;
 }
 
@@ -115,6 +118,20 @@ function compactNumber(value: number): string {
   if (absolute >= 1) return value.toFixed(2);
   if (absolute === 0) return "0";
   return value.toPrecision(3);
+}
+
+function formatMarketCap(value: number, format: "auto" | "thousands" | "millions", threshold = 1_000_000): string {
+  if (!Number.isFinite(value)) return "—";
+  const safeThreshold = Number.isFinite(threshold) && threshold >= 1_000 ? threshold : 1_000_000;
+  if (format === "thousands" || (format === "auto" && Math.abs(value) < safeThreshold)) {
+    const decimals = Math.abs(value) < 100_000 ? 1 : 0;
+    return `$${(value / 1_000).toFixed(decimals)}K`;
+  }
+  if (format === "millions" || Math.abs(value) < 1_000_000_000) {
+    const decimals = Math.abs(value) < 10_000_000 ? 2 : 1;
+    return `$${(value / 1_000_000).toFixed(decimals)}M`;
+  }
+  return `$${(value / 1_000_000_000).toFixed(2)}B`;
 }
 
 function formatPrice(value: number): string {
@@ -641,6 +658,7 @@ function drawLegacyLandscapeReplayFrame(
 function candleIntervalLabel(seconds: number): string {
   if (seconds >= 86_400) return `${Math.max(1, Math.round(seconds / 86_400))}D`;
   if (seconds >= 3_600) return `${Math.max(1, Math.round(seconds / 3_600))}H`;
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}S`;
   return `${Math.max(1, Math.round(seconds / 60))}M`;
 }
 
@@ -659,8 +677,11 @@ function drawLandscapeReplayFrame(
     : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
   const interval = candles.length > 1
-    ? Math.max(60, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
-    : Math.max(60, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+    ? Math.max(1, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
+    : Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+  const marketCapMultiplier = Number(spec.marketCapMultiplier ?? 0);
+  const showMarketCap = config.chartMetric !== "price" && Number.isFinite(marketCapMultiplier) && marketCapMultiplier > 0;
+  const chartValueFromPrice = (priceSol: number) => showMarketCap ? priceSol * marketCapMultiplier : priceSol;
   const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
   const chartEnd = Math.max(
     spec.episode.endTimestamp,
@@ -767,25 +788,35 @@ function drawLandscapeReplayFrame(
 
   context.fillStyle = theme.text;
   context.font = `bold ${27 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  context.fillText(`PRICE / SOL  ·  ${candleIntervalLabel(interval)} CANDLES`, chartX + 34 * unit, chartY + 52 * unit);
+  context.fillText(`${showMarketCap ? "MARKET CAP" : "PRICE / SOL"}  ·  ${candleIntervalLabel(interval)} CANDLES`, chartX + 34 * unit, chartY + 52 * unit);
 
   const animatedCandles = candles.flatMap((candle, index) => {
     if (candle.timestamp > activeTimestamp) return [];
     const nextTimestamp = candles[index + 1]?.timestamp ?? chartEnd;
     const local = clamp((activeTimestamp - candle.timestamp) / Math.max(1, nextTimestamp - candle.timestamp));
-    const wickProgress = easeOut(local);
-    const bodyProgress = easeInOut(clamp(local / 0.88));
     const open = Number(candle.openSol);
-    const high = open + (Number(candle.highSol) - open) * wickProgress;
-    const low = open + (Number(candle.lowSol) - open) * wickProgress;
-    const close = open + (Number(candle.closeSol) - open) * bodyProgress;
+    const finalHigh = Number(candle.highSol);
+    const finalLow = Number(candle.lowSol);
+    const finalClose = Number(candle.closeSol);
+    const rising = finalClose >= open;
+    // A deterministic intra-candle path avoids instantly revealing the final wick.
+    // Green bars probe the low, develop the body, then extend the high; red bars do the inverse.
+    const bodyProgress = easeInOut(local);
+    const firstWickProgress = easeInOut(phase(local, 0, 0.32));
+    const finalWickProgress = easeInOut(phase(local, 0.48, 1));
+    const close = open + (finalClose - open) * bodyProgress;
+    const highProbe = open + (finalHigh - open) * (rising ? finalWickProgress : firstWickProgress);
+    const lowProbe = open + (finalLow - open) * (rising ? firstWickProgress : finalWickProgress);
+    const high = Math.max(open, close, highProbe);
+    const low = Math.min(open, close, lowProbe);
     if (![open, high, low, close].every(Number.isFinite)) return [];
     return [{ ...candle, open, high, low, close, local }];
   });
   const visiblePoints = points.filter((point) => point.timestamp <= activeTimestamp);
-  const priceValues = animatedCandles.length
+  const rawPriceValues = animatedCandles.length
     ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
     : visiblePoints.map((point) => Number(point.priceSol));
+  const priceValues = rawPriceValues.map(chartValueFromPrice);
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
@@ -810,7 +841,7 @@ function drawLandscapeReplayFrame(
   );
   const displaySpan = Math.max(interval, displayEnd - displayStart);
   const xForTime = (timestamp: number) => plotX + clamp((timestamp - displayStart) / displaySpan) * plotWidth;
-  const yForPrice = (price: number) => plotY + (1 - clamp((price - minimum) / (maximum - minimum))) * plotHeight;
+  const yForPrice = (price: number) => plotY + (1 - clamp((chartValueFromPrice(price) - minimum) / (maximum - minimum))) * plotHeight;
 
   context.save();
   roundedRect(context, chartX, chartY, chartWidth, chartHeight, 28 * unit);
@@ -953,7 +984,12 @@ function drawLandscapeReplayFrame(
   context.font = `bold ${26 * unit}px ui-monospace, SFMono-Regular, monospace`;
   for (let index = 0; index < 3; index += 1) {
     const ratio = index / 2;
-    context.fillText(formatPrice(maximum - (maximum - minimum) * ratio), chartX + chartWidth - 20 * unit, plotY + 8 * unit + ratio * (plotHeight - 8 * unit));
+    const value = maximum - (maximum - minimum) * ratio;
+    context.fillText(
+      showMarketCap ? formatMarketCap(value, config.marketCapFormat ?? "auto", config.marketCapThreshold) : formatPrice(value),
+      chartX + chartWidth - 20 * unit,
+      plotY + 8 * unit + ratio * (plotHeight - 8 * unit),
+    );
   }
   context.textAlign = "left";
   context.restore();

@@ -6,6 +6,16 @@ interface OhlcvPayload {
   data?: { attributes?: { ohlcv_list?: Array<[number, number, number, number, number, number]> } };
 }
 
+interface PoolPayload {
+  data?: {
+    attributes?: {
+      base_token_price_native_currency?: string | number | null;
+      market_cap_usd?: string | number | null;
+      fdv_usd?: string | number | null;
+    };
+  };
+}
+
 interface MarketHistory {
   candles: ReplayCandle[];
   points: ReplayPoint[];
@@ -13,7 +23,8 @@ interface MarketHistory {
 
 const LAMPORTS = new Decimal(1_000_000_000);
 
-function selectCandleRequest(spanSeconds: number): { timeframe: "minute" | "hour" | "day"; aggregate: number; interval: number } {
+function selectCandleRequest(spanSeconds: number): { timeframe: "second" | "minute" | "hour" | "day"; aggregate: number; interval: number } {
+  if (spanSeconds <= 5 * 60) return { timeframe: "second", aggregate: 1, interval: 1 };
   if (spanSeconds <= 3 * 3_600) return { timeframe: "minute", aggregate: 1, interval: 60 };
   if (spanSeconds <= 15 * 3_600) return { timeframe: "minute", aggregate: 5, interval: 300 };
   if (spanSeconds <= 2 * 86_400) return { timeframe: "minute", aggregate: 15, interval: 900 };
@@ -21,6 +32,24 @@ function selectCandleRequest(spanSeconds: number): { timeframe: "minute" | "hour
   if (spanSeconds <= 120 * 86_400) return { timeframe: "hour", aggregate: 4, interval: 14_400 };
   if (spanSeconds <= 365 * 86_400) return { timeframe: "hour", aggregate: 12, interval: 43_200 };
   return { timeframe: "day", aggregate: 1, interval: 86_400 };
+}
+
+async function getMarketCapMultiplier(context: ShareContext): Promise<string | null> {
+  if (!context.pairAddress) return null;
+  try {
+    const response = await fetch(
+      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}`,
+      { headers: { accept: "application/json;version=20230203" } },
+    );
+    if (!response.ok) return null;
+    const attributes = ((await response.json()) as PoolPayload).data?.attributes;
+    const nativePrice = new Decimal(attributes?.base_token_price_native_currency ?? 0);
+    const marketCap = new Decimal(attributes?.market_cap_usd ?? attributes?.fdv_usd ?? 0);
+    if (!nativePrice.isFinite() || !marketCap.isFinite() || nativePrice.lte(0) || marketCap.lte(0)) return null;
+    return marketCap.div(nativePrice).toString();
+  } catch {
+    return null;
+  }
 }
 
 function isFiniteCandle(row: unknown): row is [number, number, number, number, number, number] {
@@ -112,7 +141,7 @@ async function getMarketHistory(
         volume: String(volume),
       }))
       .sort((a, b) => a.timestamp - b.timestamp);
-    if (candles.length < 4) return null;
+    if (candles.length < 2) return null;
     return { candles, points: buildMarkToMarketPoints(episode, candles) };
   } catch {
     return null;
@@ -126,9 +155,10 @@ export async function createReplaySpec(
 ): Promise<ReplaySpec> {
   const fillPoints = buildReplayPoints(episode);
   const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
-  const [usdPerSol, marketHistory] = await Promise.all([
+  const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(),
     getMarketHistory(context, episode),
+    getMarketCapMultiplier(context),
   ]);
   return {
     id: crypto.randomUUID(),
@@ -140,6 +170,7 @@ export async function createReplaySpec(
     episode,
     points: marketHistory?.points ?? fillPoints,
     candles: marketHistory?.candles,
+    marketCapMultiplier,
     currency: "SOL",
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,

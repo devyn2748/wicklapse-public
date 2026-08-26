@@ -13,6 +13,9 @@ export interface StudioSettings {
   width: number;
   height: number;
   fps: 30 | 60;
+  chartMetric: "marketCap" | "price";
+  marketCapFormat: "auto" | "thousands" | "millions";
+  marketCapThreshold: number;
 }
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -26,6 +29,9 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   width: 1920,
   height: 1080,
   fps: 30,
+  chartMetric: "marketCap",
+  marketCapFormat: "auto",
+  marketCapThreshold: 1_000_000,
 };
 
 export const ASPECT_PRESETS = [

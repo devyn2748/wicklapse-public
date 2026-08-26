@@ -184,6 +184,9 @@ function PreviewCanvas({
           theme: settings.theme,
           exactValues: settings.exactValues,
           walletVisibility: settings.walletVisibility,
+          chartMetric: settings.chartMetric,
+          marketCapFormat: settings.marketCapFormat,
+          marketCapThreshold: settings.marketCapThreshold,
           width: canvas.width,
           height: canvas.height,
           backgroundImage,
@@ -477,6 +480,9 @@ export function StudioApp(): JSX.Element {
         theme: settings.theme,
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
+        chartMetric: settings.chartMetric,
+        marketCapFormat: settings.marketCapFormat,
+        marketCapThreshold: settings.marketCapThreshold,
         width: settings.width,
         height: settings.height,
         fps: settings.fps,
@@ -702,7 +708,13 @@ export function StudioApp(): JSX.Element {
             </section>
 
             <section className="inspector-card" id="advanced-chart">
-              <h3>✦ Scene sequencing</h3>
+              <h3>⌁ Chart presentation</h3>
+              <div className="inspector-grid">
+                <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
+                <div className="field-group"><span>Market-cap labels</span><Segmented value={settings.marketCapFormat} options={[{ value: "auto", label: "Auto K/M" }, { value: "thousands", label: "Force K" }, { value: "millions", label: "Force M" }]} onChange={(value) => patchSettings("marketCapFormat", value)} /></div>
+                <label>Auto K→M threshold<input type="number" min={1_000} max={1_000_000_000} step={100_000} value={settings.marketCapThreshold} onChange={(event) => patchSettings("marketCapThreshold", Math.max(1_000, Number(event.target.value) || 1_000_000))} /></label>
+              </div>
+              <label className="inspector-label">Scene sequencing</label>
               <div className="scene-grid"><span>Intro Scene ✓</span><span>Entry Tag ✓</span><span>Replay Path ✓</span><span>Exit Scene ✓</span><span>Final P&L Summary & Proof ✓</span></div>
               <label>Transition style<select><option>Smooth Zoom & Glow</option><option>Clean Cuts</option><option>High-Energy Pulse</option></select></label>
             </section>

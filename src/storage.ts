@@ -93,13 +93,14 @@ export async function loadProject(): Promise<StudioProject | null> {
 }
 
 export async function saveStudioSettings(settings: StudioSettings): Promise<void> {
-  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 3, settings } });
+  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 4, settings } });
 }
 
 export async function loadStudioSettings(): Promise<StudioSettings> {
   const result = await browser.storage.local.get(KEYS.studioSettings);
   const value = result[KEYS.studioSettings];
-  if (!value || typeof value !== "object" || (value as { version?: number }).version !== 3) {
+  const version = value && typeof value === "object" ? (value as { version?: number }).version : undefined;
+  if (version !== 3 && version !== 4) {
     return DEFAULT_STUDIO_SETTINGS;
   }
   return {

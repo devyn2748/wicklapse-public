@@ -41,7 +41,9 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Optional Solana wallet/RPC fallback in Advanced
 - In-page Instant Export and full-tab Advanced Workstation
 - Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
-- Adaptive GeckoTerminal OHLCV history using real quote-token candles, TradingView-style bodies/wicks, volume, price scale, and grid
+- Adaptive GeckoTerminal OHLCV history using 1-second candles for trades up to five minutes, then 1-minute and progressively larger intervals for longer positions
+- Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels, plus an Advanced threshold and overrides for forced K, forced M, or raw token price
+- Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
 - Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
 - Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
@@ -52,7 +54,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 
 - Exact executions depend on the signed-in Axiom session and the stability of `transactions-feed-v4`; the replay UI is isolated from its compact array indexes.
 - Token symbol, mint, image, and optional P&L summary still come from the active Axiom coin page. Chart DOM data is not read.
-- Market candles use GeckoTerminal when the captured Axiom pool resolves; otherwise the renderer uses a plainly styled angular execution path rather than synthetic candles.
+- Market candles and estimated historical market cap use GeckoTerminal when the captured Axiom pool resolves; otherwise the renderer uses a plainly styled angular execution path rather than synthetic candles. Market cap falls back to the pool FDV when a circulating-cap figure is unavailable.
 - USD display uses the current SOL/USD rate rather than the historical rate at each fill.
 - Custom Advanced backgrounds currently accept images; custom video backgrounds are planned next.
 - Export uses MP4/H.264 when the browser exposes that encoder and otherwise downloads WebM/VP9.
