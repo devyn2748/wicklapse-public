@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
 import { fetchAxiomExecutions } from "./axiom-api";
+import { fetchAxiomWalletAddresses } from "./axiom-wallets";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { selectAllowedIntervals } from "./axiom-candles";
 import { type ReplaySpec, type ShareContext } from "./domain";
@@ -13,8 +14,10 @@ import {
   saveProject,
   saveShareContext,
   saveStudioSettings,
+  saveTradingWalletAddresses,
 } from "./storage";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
+import logoUrl from "../assets/icon.png";
 
 const WICKLAPSE_VERSION = browser.runtime.getManifest().version;
 
@@ -34,6 +37,9 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
 
+  const previewWidth = settings.aspectRatio === "9:16" ? 540 : 960;
+  const previewHeight = settings.aspectRatio === "9:16" ? 960 : 540;
+
   const ensureAudio = useCallback(async () => {
     const audio = audioRef.current ?? new AudioContext();
     audioRef.current = audio;
@@ -46,7 +52,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
     const audio = audioRef.current;
     if (!audio || audio.state !== "running") return;
     for (const fill of replaySoundEvents(spec)) {
-      const eventProgress = replayEventOffset(fill, spec, { duration: settings.duration, width: 960, height: 540 }) / settings.duration;
+      const eventProgress = replayEventOffset(fill, spec, { duration: settings.duration, width: previewWidth, height: previewHeight }) / settings.duration;
       if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
       soundedEventsRef.current.add(fill.signature);
       void playReplaySound(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
@@ -103,7 +109,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
 
   return (
     <div className="wick-preview">
-      <canvas ref={canvasRef} width={960} height={540} />
+      <canvas ref={canvasRef} width={previewWidth} height={previewHeight} />
       <div className="wick-playback">
         <button type="button" aria-label={playing ? "Pause" : "Play with sound"} onClick={() => {
           if (playing) {
@@ -151,7 +157,6 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const [spec, setSpec] = useState<ReplaySpec | null>(null);
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
   const [replayContext, setReplayContext] = useState<ShareContext | null>(null);
-  const [candleBusy, setCandleBusy] = useState(false);
   const replayRequestRef = useRef(new LatestReplayRequest());
   const [status, setStatus] = useState("Preparing Wicklapse…");
   const [error, setError] = useState("");
@@ -160,13 +165,29 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const buildCapturedReplay = useCallback(async (candleInterval: CandleIntervalPreference = "auto") => {
     const request = replayRequestRef.current.begin();
     setError("");
+    setView("booting");
+    setStatus("Preparing Wicklapse…");
+    setSpec(null);
+    setReplayContext(null);
+    setExportProgress(null);
     try {
       if (!context.pairAddress) throw new Error("Open Wicklapse from an Axiom /meme/{pairAddress} coin page.");
-      const walletAddresses = await loadTradingWalletAddresses();
-      setStatus(`Retrieving executions for ${walletAddresses.length || "your"} wallet${walletAddresses.length === 1 ? "" : "s"}…`);
+      const savedWallets = await loadTradingWalletAddresses();
+      let detectedWallets: string[] = [];
+      try {
+        detectedWallets = await fetchAxiomWalletAddresses({ signal: request.signal });
+      } catch (caught) {
+        if (!savedWallets.length) throw caught;
+      }
+      const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
+      if (!walletAddresses.length) {
+        throw new Error("Axiom did not expose any Solana trading wallets. Add a public wallet in Advanced as a fallback.");
+      }
+      if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
+      setStatus(`Retrieving executions across ${walletAddresses.length} Axiom wallet${walletAddresses.length === 1 ? "" : "s"}…`);
       const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
       if (!tradeExecutions.length) {
-        throw new Error("No trades found for the configured wallet(s) on this token.");
+        throw new Error("No trades found across the detected Axiom wallet(s) for this token.");
       }
       const enrichedContext: ShareContext = {
         ...context,
@@ -180,11 +201,11 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
       const episodes = buildAxiomExecutionEpisodes(enrichedContext);
       const episode = episodes[0];
       if (!episode) {
-        throw new Error("No replayable buys or sells were found for the configured wallet(s) on this token.");
+        throw new Error("No replayable buys or sells were found across the detected Axiom wallet(s).");
       }
       setStatus(`Building from ${episode.fills.length} Axiom execution${episode.fills.length === 1 ? "" : "s"}…`);
       const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal);
-      if (!replayRequestRef.current.isLatest(request.id)) return;
+      if (!replayRequestRef.current.isLatest(request.id) || context.pairAddress !== enrichedContext.pairAddress) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
       setView("instant");
@@ -206,8 +227,9 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           height: 1080,
           buySound: savedSettings.buySound === "custom" ? "pulse" : savedSettings.buySound,
           sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
+          aspectRatio: savedSettings.aspectRatio ?? "16:9",
         });
-        void buildCapturedReplay(savedSettings.candleInterval);
+        void buildCapturedReplay(savedSettings.candleInterval ?? "auto");
       })
       .catch(() => {
         if (!active) return;
@@ -227,34 +249,6 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     setSettings((current) => ({ ...current, [key]: value }));
   };
 
-  const changeCandleInterval = async (value: CandleIntervalPreference) => {
-    patch("candleInterval", value);
-    if (!spec) return;
-    const request = replayRequestRef.current.begin();
-    setCandleBusy(true);
-    setError("");
-    try {
-      const sourceContext = replayContext ?? context;
-      const nextSpec = await createReplaySpec(spec.episode, sourceContext, spec.walletAddress, value, request.signal);
-      if (!replayRequestRef.current.isLatest(request.id)) return;
-      setSpec(nextSpec);
-      await saveProject({ shareContext: sourceContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
-    } catch (caught) {
-      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
-      setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
-    } finally {
-      if (replayRequestRef.current.isLatest(request.id)) setCandleBusy(false);
-    }
-  };
-
-  const allowedCandleIntervals = useMemo(
-    () => spec ? selectAllowedIntervals(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp)) : [],
-    [spec],
-  );
-  const displayedCandleInterval = allowedCandleIntervals.some((value) => value === settings.candleInterval)
-    ? settings.candleInterval
-    : "auto";
-
   const exportVideo = async () => {
     if (!spec) return;
     setExportProgress(0);
@@ -269,8 +263,8 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         chartMetric: settings.chartMetric,
         marketCapFormat: settings.marketCapFormat,
         marketCapThreshold: settings.marketCapThreshold,
-        width: 1920,
-        height: 1080,
+        width: settings.aspectRatio === "9:16" ? 1080 : 1920,
+        height: settings.aspectRatio === "9:16" ? 1920 : 1080,
         fps: 30,
       };
       const result = await exportReplayVideo(spec, config, {
@@ -295,7 +289,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     <div className="wick-backdrop" role="dialog" aria-modal="false" aria-label="Wicklapse Instant">
       <section className={`wick-modal wick-${view}`}>
         <header className="wick-header">
-          <div className="wick-brand"><i>W</i><strong>WICKLAPSE</strong>{view === "instant" && <span>INSTANT EXPORT</span>}</div>
+          <div className="wick-brand"><img src={logoUrl} alt="Wicklapse Logo" /><strong>WICKLAPSE</strong>{view === "instant" && <span>INSTANT EXPORT</span>}</div>
           {spec && <div className="wick-trade">${spec.symbol} <b>{spec.episode.matchLabel} · {spec.episode.matchScore}%</b></div>}
           <div className="wick-header-actions">
             {view === "instant" && <button type="button" className="wick-advanced" onClick={async () => {
@@ -309,13 +303,13 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
 
         {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>Axiom trade capture and rendering remain on this device.</p></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open wallet settings</button></div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open Advanced</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
-          <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>16:9 X POST · 1920 × 1080</b></div><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
+          <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Candles</h3><span>{candleBusy ? "Refreshing…" : spec.candleIntervalSeconds ? `Using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : "Execution path"}</span></div><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
+            <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value as any)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Visual theme</h3><span>Wicklapse</span></div><div className="wick-themes">{(["obsidian", "neon", "minimal"] as ThemeName[]).map((theme) => <button type="button" className={settings.theme === theme ? "is-selected" : ""} key={theme} onClick={() => patch("theme", theme)}><i className={theme} />{theme}</button>)}</div></div>
             <div className="wick-control-grid">
               <div className="wick-control-section"><h3>Currency</h3><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></div>
@@ -325,7 +319,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
             <div className="wick-export-zone">
               {error && <div className="wick-error">{error}</div>}
               {exportProgress !== null && <div className="wick-export-progress"><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b><progress max={1} value={exportProgress} /></div>}
-              <button type="button" className="wick-primary wick-export" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "✦ 1-Click Instant Export"}</button>
+              <button type="button" className="wick-primary wick-export" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "Download"}</button>
               <div className="wick-bottom-actions"><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Verify on-chain in Advanced</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Customize in Advanced →</button></div>
             </div>
           </section>

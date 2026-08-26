@@ -3,6 +3,8 @@ import type { CandleIntervalPreference } from "./axiom-candles";
 import type { SoundName } from "./export-video";
 import type { ThemeName, WalletVisibility } from "./renderer";
 
+export type CardAspectRatio = "16:9" | "9:16";
+
 export interface StudioSettings {
   duration: number;
   theme: ThemeName;
@@ -18,6 +20,7 @@ export interface StudioSettings {
   marketCapFormat: "auto" | "thousands" | "millions";
   marketCapThreshold: number;
   candleInterval: CandleIntervalPreference;
+  aspectRatio: CardAspectRatio;
 }
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -35,6 +38,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   marketCapFormat: "auto",
   marketCapThreshold: 1_000_000,
   candleInterval: "auto",
+  aspectRatio: "16:9",
 };
 
 export const ASPECT_PRESETS = [
@@ -43,3 +47,4 @@ export const ASPECT_PRESETS = [
   { label: "9:16", width: 1080, height: 1920 },
   { label: "4:5", width: 1080, height: 1350 },
 ] as const;
+

@@ -38,6 +38,30 @@ export const AxiomTradeEventSchema = z.object({
 
 export type AxiomTradeEvent = z.infer<typeof AxiomTradeEventSchema>;
 
+export const AxiomPairMetadataSchema = z.object({
+  pairAddress: z.string(),
+  tokenAddress: z.string().optional(),
+  openTrading: z.string().optional(),
+  pairCreatedAt: z.string().optional(),
+  lastTransactionTime: z.string().optional(),
+  isNew: z.string().optional(),
+  isMigrated: z.string().optional(),
+  v: z.string().optional(),
+  showOutliers: z.string().optional(),
+});
+
+export type AxiomPairMetadata = z.infer<typeof AxiomPairMetadataSchema>;
+
+export const AxiomPairContextSchema = z.object({
+  pairAddress: z.string(),
+  tokenAddress: z.string().nullable(),
+  chartBaseUrl: z.string().url(),
+  metadata: AxiomPairMetadataSchema,
+  capturedAt: z.number().int().positive(),
+});
+
+export type AxiomPairContext = z.infer<typeof AxiomPairContextSchema>;
+
 export const ShareContextSchema = z.object({
   id: z.string(),
   capturedAt: z.number().int().positive(),
@@ -49,6 +73,7 @@ export const ShareContextSchema = z.object({
   tokenImageUrl: z.string().url().nullable().optional(),
   /** A safe pair-chart-v3 URL observed on the active Axiom page (no auth material). */
   axiomChartUrl: z.string().url().nullable().optional(),
+  axiomPairContext: AxiomPairContextSchema.nullable().optional(),
   tradeExecutions: z.array(TradeExecutionSchema).max(5_000).optional(),
   tradeEvents: z.array(AxiomTradeEventSchema).max(250).optional(),
   walletAddresses: z.array(SolanaAddressSchema).max(25).optional(),

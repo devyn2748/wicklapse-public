@@ -402,7 +402,7 @@ export function StudioApp(): JSX.Element {
         buySound: savedSettings.buySound === "custom" ? "pulse" : savedSettings.buySound,
         sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
       });
-      setWalletInput(savedWallets.join(", "));
+      setWalletInput((share?.walletAddresses?.length ? share.walletAddresses : savedWallets).join(", "));
       if (share) {
         setContext(share);
         setMint(share.tokenMint ?? "");
@@ -457,18 +457,12 @@ export function StudioApp(): JSX.Element {
 
   const findTrade = async () => {
     setError("");
-    const walletAddresses = normalizeWalletAddresses([walletInput]);
-    if (!walletAddresses.length) {
-      setError("Add at least one public Axiom trading wallet.");
-      return;
-    }
-    await saveTradingWalletAddresses(walletAddresses);
+    const fallbackWallets = normalizeWalletAddresses([walletInput]);
+    if (fallbackWallets.length) await saveTradingWalletAddresses(fallbackWallets);
     let resolvedContext = context;
-    const cachedWallets = new Set(context?.walletAddresses ?? []);
-    const needsRefresh = !context?.tradeExecutions?.length || walletAddresses.some((wallet) => !cachedWallets.has(wallet));
-    if (needsRefresh) {
+    if (context?.pairAddress) {
       setBusy(true);
-      setProgressMessage("Retrieving exact executions from Axiom…");
+      setProgressMessage("Detecting Axiom wallets and retrieving exact executions…");
       try {
         const response = await browser.runtime.sendMessage({
           type: "WICKLAPSE_REFRESH_AXIOM_TRADE",
@@ -479,17 +473,24 @@ export function StudioApp(): JSX.Element {
         if (!parsedContext.success) throw new Error("Axiom returned trade data in an unsupported format.");
         resolvedContext = parsedContext.data;
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Axiom trade lookup failed.");
-        return;
+        if (!resolvedContext?.tradeExecutions?.length) {
+          setError(caught instanceof Error ? caught.message : "Axiom trade lookup failed.");
+          return;
+        }
       } finally {
         setBusy(false);
         setProgressMessage("");
       }
     }
     if (!resolvedContext?.tradeExecutions?.length) {
-      setError("No trades found for the configured wallet(s) on this token.");
+      setError("No trades found across the detected Axiom wallet(s) on this token.");
       return;
     }
+    const walletAddresses = normalizeWalletAddresses([
+      ...(resolvedContext.walletAddresses ?? []),
+      ...resolvedContext.tradeExecutions.map((execution) => execution.wallet),
+      ...fallbackWallets,
+    ]);
     const matchingExecutions = resolvedContext.tradeExecutions.filter((execution) => walletAddresses.includes(execution.wallet));
     const sourceContext: ShareContext = {
       ...resolvedContext,
@@ -500,7 +501,7 @@ export function StudioApp(): JSX.Element {
     };
     const candidates = buildAxiomExecutionEpisodes(sourceContext);
     if (!candidates.length) {
-      setError("No trades found for the configured wallet(s) on this token.");
+      setError("No trades found across the detected Axiom wallet(s) on this token.");
       return;
     }
     setContext(sourceContext);
@@ -704,7 +705,7 @@ export function StudioApp(): JSX.Element {
           <section className="hero-copy">
             <div className="eyebrow">AXIOM → WICKLAPSE</div>
             <h1>Turn the selected trade into motion.</h1>
-            <p>Open Wicklapse from Axiom’s Share dialog. Wicklapse retrieves the selected token’s exact executions automatically for your saved public trading wallets.</p>
+            <p>Open Wicklapse from Axiom’s Share dialog. Wicklapse detects your public Axiom trading wallets and combines their executions automatically.</p>
             <div className="capture-summary">
               <span className={context ? "ready-dot" : "idle-dot"} />
               <div>
@@ -720,9 +721,11 @@ export function StudioApp(): JSX.Element {
               <span className="private-badge">Stored locally</span>
             </div>
             <label>
-              Public trading wallets
-              <input value={walletInput} onChange={(event) => setWalletInput(event.target.value)} placeholder="Wallet 1, Wallet 2, …" />
-              <small>Comma-separate multiple Axiom trading wallets. They are stored only in this Chrome profile.</small>
+              Fallback public wallets <span className="optional-label">Optional</span>
+              <input value={walletInput} onChange={(event) => setWalletInput(event.target.value)} placeholder="Normally detected from Axiom" />
+              <small>{context?.walletAddresses?.length
+                ? `${context.walletAddresses.length} Axiom wallet${context.walletAddresses.length === 1 ? "" : "s"} detected. Add addresses here only if Axiom detection fails.`
+                : "Wicklapse will detect Axiom wallets when you generate. Comma-separate addresses only as a fallback."}</small>
             </label>
             <label>
               Token mint

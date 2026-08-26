@@ -2,11 +2,11 @@ import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
-import { sanitizeAxiomChartUrl } from "../../src/axiom-candles";
-import { ShareContextSchema, type ShareContext } from "../../src/domain";
+import { extractAxiomPairContext, sanitizeAxiomChartUrl } from "../../src/axiom-candles";
+import { ShareContextSchema, type AxiomPairContext, type ShareContext } from "../../src/domain";
 import { InstantOverlay } from "../../src/instant-overlay";
 import overlayStyles from "../../src/instant-overlay.css?inline";
-import { loadTradingWalletAddresses, saveShareContext } from "../../src/storage";
+import { loadTradingWalletAddresses, saveShareContext, saveTradingWalletAddresses } from "../../src/storage";
 
 const BASE58_PATTERN = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
 
@@ -51,18 +51,58 @@ function findPairAddress(): string | null {
   return pairAddressFromAxiomUrl(location.href);
 }
 
-function findAxiomChartUrl(): string | null {
-  const pairAddress = findPairAddress();
+let activePairAddress = findPairAddress();
+let activePairContext: AxiomPairContext | null = null;
+
+function handlePairChange(newPairAddress: string | null) {
+  if (newPairAddress === activePairAddress) return;
+  console.info(`[Wicklapse] Active pair changed: ${activePairAddress} -> ${newPairAddress}. Invalidating cached pair context.`);
+  activePairAddress = newPairAddress;
+  activePairContext = null;
+  performance.setResourceTimingBufferSize(10_000);
+  window.dispatchEvent(new CustomEvent("wicklapse:pair-changed", { detail: newPairAddress }));
+}
+
+const resourceObserver = new PerformanceObserver((list) => {
+  const currentPair = findPairAddress();
+  if (currentPair !== activePairAddress) {
+    handlePairChange(currentPair);
+  }
+  for (const entry of list.getEntries()) {
+    try {
+      const url = new URL(entry.name);
+      const isAxiomHost = url.hostname === "axiom.trade" || url.hostname.endsWith(".axiom.trade");
+      if (isAxiomHost && url.pathname.endsWith("/pair-chart-v3")) {
+        const context = extractAxiomPairContext(url.toString(), activePairAddress);
+        if (context) {
+          activePairContext = context;
+          console.info(`[Wicklapse] Captured fresh pair context for ${context.pairAddress}: tokenAddress=${context.tokenAddress}`);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+});
+
+function findAxiomPairContext(): AxiomPairContext | null {
+  if (activePairContext && activePairContext.pairAddress === activePairAddress) {
+    return activePairContext;
+  }
   const entries = performance.getEntriesByType("resource").slice().reverse();
   for (const entry of entries) {
     try {
       const url = new URL(entry.name);
       const isAxiomHost = url.hostname === "axiom.trade" || url.hostname.endsWith(".axiom.trade");
       if (!isAxiomHost || !url.pathname.endsWith("/pair-chart-v3")) continue;
-      if (pairAddress && url.searchParams.get("pairAddress") !== pairAddress) continue;
-      return sanitizeAxiomChartUrl(url.toString(), pairAddress);
+      const context = extractAxiomPairContext(url.toString(), activePairAddress);
+      if (context) {
+        activePairContext = context;
+        console.info(`[Wicklapse] Captured pair context from historical buffer for ${context.pairAddress}: tokenAddress=${context.tokenAddress}`);
+        return context;
+      }
     } catch {
-      // Ignore unrelated or non-URL performance entries.
+      // Ignore
     }
   }
   return null;
@@ -164,7 +204,8 @@ function buildShareContext(): ShareContext {
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
-    axiomChartUrl: findAxiomChartUrl(),
+    axiomChartUrl: findAxiomPairContext()?.chartBaseUrl ?? null,
+    axiomPairContext: findAxiomPairContext(),
     walletAddress: null,
     walletLabel: null,
     boughtSol: summaryUsesSol ? numberAfterLabel(summaryText, ["Bought", "Invested"]) : null,
@@ -180,7 +221,18 @@ function buildShareContext(): ShareContext {
 async function retrieveCurrentTradeContext(): Promise<ShareContext> {
   const context = buildShareContext();
   if (!context.pairAddress) throw new Error("The current Axiom URL does not contain a pair address.");
-  const walletAddresses = await loadTradingWalletAddresses();
+  const savedWallets = await loadTradingWalletAddresses();
+  let detectedWallets: string[] = [];
+  try {
+    detectedWallets = await fetchAxiomWalletAddresses();
+  } catch (error) {
+    if (!savedWallets.length) throw error;
+  }
+  const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
+  if (!walletAddresses.length) {
+    throw new Error("Axiom did not expose any Solana trading wallets. Add a public wallet in Advanced as a fallback.");
+  }
+  if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
   const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
   const enrichedContext = ShareContextSchema.parse({
     ...context,
@@ -246,8 +298,24 @@ export default defineContentScript({
       overlayHost = null;
     };
 
+    const handlePairChangedEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (overlayHost) {
+        if (!detail) {
+          closeOverlay();
+        } else {
+          void openInstant();
+        }
+      }
+    };
+    window.addEventListener("wicklapse:pair-changed", handlePairChangedEvent);
+
     const openInstant = async () => {
       const context = buildShareContext();
+      if (!context.pairAddress) {
+        closeOverlay();
+        return;
+      }
       await saveShareContext(context);
       if (!overlayHost) {
         overlayHost = document.createElement("div");
@@ -276,8 +344,25 @@ export default defineContentScript({
       dialog.append(makeEntryButton(() => void openInstant()));
     };
 
-    const observer = new MutationObserver(injectEntry);
+    const checkUrlChange = () => {
+      const current = findPairAddress();
+      if (current !== activePairAddress) handlePairChange(current);
+    };
+
+    const observer = new MutationObserver(() => {
+      checkUrlChange();
+      injectEntry();
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
+    
+    performance.setResourceTimingBufferSize(10_000);
+    try {
+      resourceObserver.observe({ entryTypes: ["resource"] });
+    } catch {
+      // Ignore if not supported
+    }
+
+    checkUrlChange();
     injectEntry();
 
     const handleMessage = (message: unknown) => {
@@ -301,6 +386,8 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener(handleMessage);
     ctx.onInvalidated(() => {
       observer.disconnect();
+      resourceObserver.disconnect();
+      window.removeEventListener("wicklapse:pair-changed", handlePairChangedEvent);
       closeOverlay();
       browser.runtime.onMessage.removeListener(handleMessage);
     });

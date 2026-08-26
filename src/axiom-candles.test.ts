@@ -114,3 +114,96 @@ describe("Axiom candle parsing", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET", credentials: "include" });
   });
 });
+
+describe("SPA navigation and Pair Context handling", () => {
+  const pairA = "4".repeat(44);
+  const pairB = "5".repeat(44);
+  const tokenMintB = "6".repeat(44);
+
+  const contextA: ShareContext = {
+    ...context,
+    pairAddress: pairA,
+    tokenMint: "TOKEN_A",
+    axiomPairContext: {
+      pairAddress: pairA,
+      tokenAddress: "TOKEN_A",
+      chartBaseUrl: "https://api2.axiom.trade/pair-chart-v3",
+      capturedAt: Date.now(),
+      metadata: {
+        pairAddress: pairA,
+        tokenAddress: "TOKEN_A",
+        openTrading: "1000",
+        pairCreatedAt: "2000",
+        isMigrated: "false",
+      },
+    },
+  };
+
+  it("1. Coin A -> generate works", () => {
+    const request = buildAxiomCandleRequest(contextA, episode(600), "auto")!;
+    const url = new URL(request.url);
+    expect(url.searchParams.get("pairAddress")).toBe(pairA);
+    expect(url.searchParams.get("tokenAddress")).toBe("TOKEN_A");
+    expect(url.searchParams.get("openTrading")).toBe("1000");
+  });
+
+  it("2. Navigate Coin A -> Coin B without refresh (stale context rejected)", () => {
+    // Simulate SPA navigation: context.pairAddress is now Coin B, but axiomPairContext is still Coin A
+    const contextBStale: ShareContext = {
+      ...contextA,
+      pairAddress: pairB, // Active pair changed
+      tokenMint: tokenMintB,
+    };
+    
+    // The guard should block the candle request entirely because of the pair mismatch
+    const request = buildAxiomCandleRequest(contextBStale, episode(600), "auto");
+    expect(request).toBeNull();
+  });
+
+  it("3 & 4. Coin B request uses Coin B params, no stale Coin A metadata is reused", () => {
+    const contextBFresh: ShareContext = {
+      ...context,
+      pairAddress: pairB,
+      tokenMint: tokenMintB,
+      axiomPairContext: {
+        pairAddress: pairB,
+        tokenAddress: tokenMintB,
+        chartBaseUrl: "https://api3.axiom.trade/pair-chart-v3",
+        capturedAt: Date.now(),
+        metadata: {
+          pairAddress: pairB,
+          tokenAddress: tokenMintB,
+          // Missing openTrading, isMigrated, etc - prove they don't bleed from Coin A
+        },
+      },
+    };
+    const request = buildAxiomCandleRequest(contextBFresh, episode(600), "auto")!;
+    const url = new URL(request.url);
+    expect(url.hostname).toBe("api3.axiom.trade");
+    expect(url.searchParams.get("pairAddress")).toBe(pairB);
+    expect(url.searchParams.get("tokenAddress")).toBe(tokenMintB);
+    // Ensure metadata from Coin A did not bleed over
+    expect(url.searchParams.has("openTrading")).toBe(false);
+    expect(url.searchParams.has("isMigrated")).toBe(false);
+  });
+
+  it("5. Switching repeatedly between coins continues to work safely", () => {
+    // Alternating between correctly updated fresh contexts works
+    const requestA = buildAxiomCandleRequest(contextA, episode(600), "auto")!;
+    expect(new URL(requestA.url).searchParams.get("pairAddress")).toBe(pairA);
+    
+    const contextBFresh: ShareContext = {
+      ...context,
+      pairAddress: pairB,
+      axiomPairContext: {
+        pairAddress: pairB,
+        tokenAddress: null,
+        chartBaseUrl: "https://api2.axiom.trade/pair-chart-v3",
+        capturedAt: Date.now(),
+        metadata: { pairAddress: pairB },
+      },
+    };
+    const requestB = buildAxiomCandleRequest(contextBFresh, episode(600), "auto")!;
+    expect(new URL(requestB.url).searchParams.get("pairAddress")).toBe(pairB);
+  });
+});

@@ -6,7 +6,7 @@ button, input, select { font: inherit; }
 .wick-modal.wick-setup, .wick-modal.wick-error, .wick-modal.wick-booting, .wick-modal.wick-resolving { width: min(520px, calc(100vw - 36px)); height: min(460px, calc(100vh - 28px)); }
 .wick-header { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid rgba(131, 178, 156, .15); background: rgba(11, 15, 14, .96); }
 .wick-brand { display: flex; align-items: center; gap: 10px; flex: none; letter-spacing: .09em; }
-.wick-brand i { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; border: 1px solid rgba(22, 237, 149, .5); color: #16ed95; background: rgba(22, 237, 149, .08); font-style: normal; font-size: 14px; font-weight: 900; }
+.wick-brand img { width: 32px; height: 32px; object-fit: contain; border-radius: 8px; }
 .wick-brand strong { font-size: 13px; }
 .wick-brand span { display: none; padding: 6px 8px; border: 1px solid rgba(22, 237, 149, .35); border-radius: 6px; color: #16ed95; font-size: 9px; font-weight: 800; letter-spacing: .08em; }
 .wick-trade { min-width: 0; padding-left: 20px; border-left: 1px solid rgba(131, 178, 156, .18); color: #dcebe3; font-size: 13px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -39,25 +39,23 @@ button, input, select { font: inherit; }
 .wick-error { padding: 11px; border: 1px solid rgba(255, 71, 126, .28); border-radius: 9px; background: rgba(255, 71, 126, .08); color: #ff91ae; font-size: 10px; line-height: 1.45; }
 .wick-error-body { min-height: 350px; align-content: center; }
 .wick-error-body > div:last-child { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.wick-instant-body { min-height: 0; display: grid; align-content: start; gap: 8px; padding: 13px 15px 15px; overflow: auto; background: radial-gradient(circle at 22% 20%, rgba(22, 237, 149, .06), transparent 34%), #080b0a; }
+.wick-instant-body { min-height: 0; display: grid; align-content: start; gap: 6px; padding: 10px 15px 12px; overflow: auto; background: radial-gradient(circle at 22% 20%, rgba(22, 237, 149, .06), transparent 34%), #080b0a; }
 .wick-preview-column { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 7px; }
-.wick-format { width: min(100%, 650px); display: flex; justify-content: space-between; color: #6f8178; font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
-.wick-format b { color: #16ed95; font-weight: 750; }
-.wick-preview { width: min(100%, 650px); display: grid; gap: 7px; }
-.wick-preview canvas { width: 100%; aspect-ratio: 16 / 9; border: 1px solid rgba(131, 178, 156, .17); border-radius: 12px; background: #020403; box-shadow: 0 20px 45px rgba(0, 0, 0, .4); }
+.wick-preview { width: min(100%, 650px); display: grid; gap: 7px; margin-bottom: 2px; }
+.wick-preview canvas { width: 100%; max-height: max(200px, calc(100vh - 460px)); object-fit: contain; border: 1px solid rgba(131, 178, 156, .17); border-radius: 12px; background: #020403; box-shadow: 0 20px 45px rgba(0, 0, 0, .4); }
 .wick-playback { display: grid; grid-template-columns: 34px 1fr 66px; align-items: center; gap: 10px; color: #7b8f85; font: 600 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wick-playback button { width: 32px; height: 32px; border: 1px solid rgba(131, 178, 156, .18); border-radius: 8px; background: #121615; color: #16ed95; cursor: pointer; }
 .wick-playback input { height: auto; padding: 0; accent-color: #16ed95; }
 .wick-controls { min-width: 0; display: flex; flex-direction: column; }
-.wick-control-section { display: grid; gap: 7px; padding: 9px 0; border-bottom: 1px solid rgba(131, 178, 156, .12); }
+.wick-control-section { display: grid; gap: 5px; padding: 6px 0; border-bottom: 1px solid rgba(131, 178, 156, .12); }
 .wick-control-section h3, .wick-section-title h3 { margin: 0; color: #c5d4cd; font: 800 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: .06em; }
 .wick-section-title { display: flex; justify-content: space-between; align-items: center; }
 .wick-section-title span { color: #16ed95; font: 650 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wick-segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 7px; }
-.wick-segmented button { min-width: 0; height: 38px; border: 1px solid rgba(131, 178, 156, .16); border-radius: 9px; background: #131716; color: #82958b; cursor: pointer; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.wick-segmented button { min-width: 0; height: 32px; border: 1px solid rgba(131, 178, 156, .16); border-radius: 9px; background: #131716; color: #82958b; cursor: pointer; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .wick-segmented button.is-selected { border-color: rgba(22, 237, 149, .54); color: #05110b; background: #16d994; box-shadow: 0 8px 24px rgba(22, 237, 149, .08); }
 .wick-themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.wick-themes button { height: 45px; padding: 5px; display: grid; grid-template-rows: 18px auto; gap: 3px; border: 1px solid rgba(131, 178, 156, .16); border-radius: 9px; background: #131716; color: #879990; cursor: pointer; text-transform: capitalize; font-size: 8px; font-weight: 750; }
+.wick-themes button { height: 38px; padding: 4px; display: grid; grid-template-rows: 14px auto; gap: 3px; border: 1px solid rgba(131, 178, 156, .16); border-radius: 9px; background: #131716; color: #879990; cursor: pointer; text-transform: capitalize; font-size: 8px; font-weight: 750; }
 .wick-themes button.is-selected { border-color: #16ed95; color: #e9fff4; }
 .wick-themes i { display: block; border-radius: 6px; }
 .wick-themes i.obsidian { background: linear-gradient(135deg, #030705, #16ed95); }
@@ -65,10 +63,10 @@ button, input, select { font: inherit; }
 .wick-themes i.minimal { background: linear-gradient(135deg, #101213, #8c9993); }
 .wick-control-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 9px; }
 .wick-control-grid > :first-child { grid-column: auto; }
-.wick-sound-select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid rgba(131, 178, 156, .18); border-radius: 9px; outline: 0; background: #131716; color: #d8e8df; font-size: 10px; font-weight: 750; cursor: pointer; }
+.wick-sound-select { width: 100%; height: 32px; padding: 0 11px; border: 1px solid rgba(131, 178, 156, .18); border-radius: 9px; outline: 0; background: #131716; color: #d8e8df; font-size: 10px; font-weight: 750; cursor: pointer; }
 .wick-sound-select:focus { border-color: rgba(22, 237, 149, .58); box-shadow: 0 0 0 3px rgba(22, 237, 149, .07); }
-.wick-export-zone { margin-top: 0; padding-top: 10px; display: grid; gap: 8px; }
-.wick-export { height: 46px; font-size: 12px; letter-spacing: .02em; }
+.wick-export-zone { margin-top: 0; padding-top: 6px; display: grid; gap: 8px; }
+.wick-export { height: 40px; font-size: 12px; letter-spacing: .02em; }
 .wick-bottom-actions { display: none; grid-template-columns: 1fr 1fr; gap: 9px; }
 .wick-bottom-actions button { font-size: 10px; }
 .wick-export-progress { display: grid; grid-template-columns: 1fr auto; gap: 7px; color: #81958a; font-size: 9px; }
@@ -82,6 +80,6 @@ button, input, select { font: inherit; }
 @media (max-height: 760px) {
   .wick-modal { height: calc(100vh - 16px); grid-template-rows: 52px minmax(0, 1fr) 30px; }
   .wick-instant-body { padding-top: 9px; }
-  .wick-format, .wick-footer b { display: none; }
+  .wick-footer b { display: none; }
   .wick-preview canvas { max-height: 230px; object-fit: contain; }
 }
