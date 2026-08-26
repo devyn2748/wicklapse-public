@@ -67,6 +67,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
       duration: settings.duration,
       currency: settings.currency,
       theme: settings.theme,
+      backgroundStyle: settings.backgroundStyle,
       exactValues: settings.exactValues,
       walletVisibility: settings.walletVisibility,
       chartMetric: settings.chartMetric,
@@ -258,6 +259,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         duration: settings.duration,
         currency: settings.currency,
         theme: settings.theme,
+      backgroundStyle: settings.backgroundStyle,
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
@@ -310,7 +312,33 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value as any)} /></div>
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Visual theme</h3><span>Wicklapse</span></div><div className="wick-themes">{(["obsidian", "neon", "minimal"] as ThemeName[]).map((theme) => <button type="button" className={settings.theme === theme ? "is-selected" : ""} key={theme} onClick={() => patch("theme", theme)}><i className={theme} />{theme}</button>)}</div></div>
+            <div className="wick-control-section">
+  <div className="wick-section-title">
+    <h3>Visual Theme</h3>
+    <span>Wicklapse</span>
+  </div>
+  <select className="wick-sound-select" value={settings.theme} onChange={(e) => patch("theme", e.target.value as ThemeName)}>
+    <option value="obsidian">Obsidian</option>
+    <option value="neon">Neon</option>
+    <option value="minimal">Minimal</option>
+    <option value="cyberpunk">Cyberpunk</option>
+    <option value="sunset">Sunset</option>
+    <option value="matrix">Matrix</option>
+    <option value="hacker">Hacker</option>
+  </select>
+</div>
+<div className="wick-control-section">
+  <div className="wick-section-title">
+    <h3>Background Design</h3>
+    <span>Wicklapse</span>
+  </div>
+  <select className="wick-sound-select" value={settings.backgroundStyle} onChange={(e) => patch("backgroundStyle", e.target.value as any)}>
+    <option value="glow">Ambient Glow</option>
+    <option value="solid">Solid Color</option>
+    <option value="grid">Retro Grid</option>
+    <option value="particles">Particles</option>
+  </select>
+</div>
             <div className="wick-control-grid">
               <div className="wick-control-section"><h3>Currency</h3><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></div>
               <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>

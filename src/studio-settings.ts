@@ -4,6 +4,7 @@ import type { SoundName } from "./export-video";
 import type { ThemeName, WalletVisibility } from "./renderer";
 
 export type CardAspectRatio = "16:9" | "9:16";
+export type BackgroundStyle = "glow" | "solid" | "grid" | "particles";
 
 export interface StudioSettings {
   duration: number;
@@ -21,6 +22,7 @@ export interface StudioSettings {
   marketCapThreshold: number;
   candleInterval: CandleIntervalPreference;
   aspectRatio: CardAspectRatio;
+  backgroundStyle: BackgroundStyle;
 }
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -39,6 +41,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   marketCapThreshold: 1_000_000,
   candleInterval: "auto",
   aspectRatio: "16:9",
+  backgroundStyle: "glow",
 };
 
 export const ASPECT_PRESETS = [
