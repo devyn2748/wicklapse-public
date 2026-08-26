@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { browser } from "wxt/browser";
 import { fetchAxiomExecutions } from "./axiom-api";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { selectAllowedIntervals } from "./axiom-candles";
@@ -14,6 +15,8 @@ import {
   saveStudioSettings,
 } from "./storage";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
+
+const WICKLAPSE_VERSION = browser.runtime.getManifest().version;
 
 interface InstantOverlayProps {
   context: ShareContext;
@@ -327,7 +330,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
             </div>
           </section>
         </main>}
-        <footer className="wick-footer"><span>♢ {spec?.verified ? "On-chain verified" : spec ? "Captured from Axiom · local-first" : "Local-first · private by default"}</span><b>Rendered client-side</b></footer>
+        <footer className="wick-footer"><span>♢ {spec?.verified ? "On-chain verified" : spec ? "Captured from Axiom · local-first" : "Local-first · private by default"}</span><b>v{WICKLAPSE_VERSION} · Rendered client-side</b></footer>
       </section>
     </div>
   );

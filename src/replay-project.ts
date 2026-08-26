@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import type { ReplayCandle, ReplayPoint, ReplaySpec, ShareContext, TradeEpisode } from "./domain";
 import { buildReplayPoints } from "./episodes";
+import { fetchPublicMarketJson } from "./market-data";
 import {
   fetchAxiomCandles,
   intervalSeconds,
@@ -87,12 +88,12 @@ export class LatestReplayRequest {
 async function getMarketCapMultiplier(context: ShareContext, signal?: AbortSignal): Promise<string | null> {
   if (!context.pairAddress) return null;
   try {
-    const response = await fetch(
+    const response = await fetchPublicMarketJson(
       `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}`,
       { headers: { accept: "application/json;version=20230203" }, signal },
     );
     if (!response.ok) return null;
-    const attributes = ((await response.json()) as PoolPayload).data?.attributes;
+    const attributes = (response.payload as PoolPayload).data?.attributes;
     const nativePrice = new Decimal(attributes?.base_token_price_native_currency ?? 0);
     const marketCap = new Decimal(attributes?.market_cap_usd ?? attributes?.fdv_usd ?? 0);
     if (!nativePrice.isFinite() || !marketCap.isFinite() || nativePrice.lte(0) || marketCap.lte(0)) return null;
@@ -167,9 +168,9 @@ function aggregateCandles(candles: ReplayCandle[], interval: number): ReplayCand
 
 async function getUsdPerSol(signal?: AbortSignal): Promise<string | null> {
   try {
-    const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal });
+    const response = await fetchPublicMarketJson("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal });
     if (!response.ok) return null;
-    const payload = await response.json();
+    const payload = response.payload as { solana?: { usd?: string | number } };
     return payload?.solana?.usd ? String(payload.solana.usd) : null;
   } catch (error) {
     if (isAbortError(error)) throw error;
@@ -233,12 +234,12 @@ async function getMarketHistoryAtInterval(
     include_empty_intervals: "true",
   });
   try {
-    const response = await fetch(
+    const response = await fetchPublicMarketJson(
       `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pairAddress)}/ohlcv/${request.timeframe}?${params}`,
       { headers: { accept: "application/json;version=20230203" }, signal },
     );
     if (!response.ok) return null;
-    const payload = (await response.json()) as OhlcvPayload;
+    const payload = response.payload as OhlcvPayload;
     const sourceCandles = (payload.data?.attributes?.ohlcv_list ?? [])
       .filter(isFiniteCandle)
       .filter(([timestamp]) => timestamp >= episode.startTimestamp - request.interval && timestamp <= episode.endTimestamp + request.interval)

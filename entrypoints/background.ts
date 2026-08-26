@@ -1,5 +1,37 @@
 import { browser } from "wxt/browser";
 
+const marketRequests = new Map<string, AbortController>();
+const PUBLIC_MARKET_HOSTS = new Set(["api.geckoterminal.com", "api.coingecko.com"]);
+
+async function fetchPublicMarketJson(message: {
+  requestId: string;
+  url: string;
+  headers: Record<string, string>;
+}): Promise<{ ok?: boolean; status?: number; payload?: unknown; error?: string }> {
+  try {
+    const url = new URL(message.url);
+    if (url.protocol !== "https:" || !PUBLIC_MARKET_HOSTS.has(url.hostname)) {
+      return { error: "Wicklapse blocked an unsupported market-data host." };
+    }
+    const controller = new AbortController();
+    marketRequests.get(message.requestId)?.abort();
+    marketRequests.set(message.requestId, controller);
+    const response = await fetch(url, { headers: message.headers, signal: controller.signal });
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Preserve the HTTP status so the caller can continue to its next fallback.
+    }
+    return { ok: response.ok, status: response.status, payload };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") return { error: "Market request aborted." };
+    return { error: error instanceof Error ? error.message : "The market-data request failed." };
+  } finally {
+    marketRequests.delete(message.requestId);
+  }
+}
+
 async function openStudio(): Promise<void> {
   await browser.tabs.create({ url: browser.runtime.getURL("/studio.html?mode=advanced") });
 }
@@ -112,6 +144,20 @@ export default defineBackground(() => {
     if (message.type === "WICKLAPSE_REFRESH_AXIOM_TRADE") {
       const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
       return refreshAxiomTrade(pairAddress);
+    }
+    if (
+      message.type === "WICKLAPSE_FETCH_MARKET_JSON" &&
+      "requestId" in message && typeof message.requestId === "string" &&
+      "url" in message && typeof message.url === "string"
+    ) {
+      const headers = "headers" in message && message.headers && typeof message.headers === "object"
+        ? Object.fromEntries(Object.entries(message.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+        : {};
+      return fetchPublicMarketJson({ requestId: message.requestId, url: message.url, headers });
+    }
+    if (message.type === "WICKLAPSE_ABORT_MARKET_REQUEST" && "requestId" in message && typeof message.requestId === "string") {
+      marketRequests.get(message.requestId)?.abort();
+      return Promise.resolve({ ok: true });
     }
     if (message.type === "WICKLAPSE_ENSURE_RPC_PERMISSION" && "endpoint" in message && typeof message.endpoint === "string") {
       return ensureRpcPermission(message.endpoint);
