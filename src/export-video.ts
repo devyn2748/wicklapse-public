@@ -36,7 +36,16 @@ function scheduleTone(
   oscillator.stop(when + 0.32);
 }
 
-function eventOffset(fill: TradeFill, spec: ReplaySpec, duration: number): number {
+export function playReplayTone(
+  audio: AudioContext,
+  sound: SoundName,
+  side: TradeFill["side"],
+  volume = 0.8,
+): void {
+  scheduleTone(audio, audio.destination, audio.currentTime + 0.015, sound, volume, side);
+}
+
+export function replayEventOffset(fill: TradeFill, spec: ReplaySpec, duration: number): number {
   const span = Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp);
   const relative = (fill.timestamp - spec.episode.startTimestamp) / span;
   return Math.max(0.25, Math.min(duration - 0.25, relative * duration * 0.72 + duration * 0.08));
@@ -62,7 +71,7 @@ export async function exportReplayVideo(
     scheduleTone(
       audio,
       destination,
-      now + eventOffset(fill, spec, config.duration),
+      now + replayEventOffset(fill, spec, config.duration),
       fill.side === "buy" ? audioOptions.buySound : audioOptions.sellSound,
       audioOptions.eventVolume ?? 0.8,
       fill.side,

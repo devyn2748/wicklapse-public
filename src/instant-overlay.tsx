@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, type JSX } from "react
 import { fetchAxiomExecutions } from "./axiom-api";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
-import { exportReplayVideo, type SoundName } from "./export-video";
+import { exportReplayVideo, playReplayTone, replayEventOffset, type SoundName } from "./export-video";
 import { createReplaySpec } from "./replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName } from "./renderer";
 import {
@@ -24,8 +24,30 @@ type View = "booting" | "instant" | "error";
 
 function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSettings }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioRef = useRef<AudioContext | null>(null);
+  const previousProgressRef = useRef(0);
+  const soundedEventsRef = useRef(new Set<string>());
   const [playing, setPlaying] = useState(true);
   const [progress, setProgress] = useState(0);
+
+  const ensureAudio = useCallback(async () => {
+    const audio = audioRef.current ?? new AudioContext();
+    audioRef.current = audio;
+    if (audio.state === "suspended") await audio.resume();
+    return audio;
+  }, []);
+
+  const soundCrossedEvents = useCallback((previous: number, next: number) => {
+    if (next < previous) soundedEventsRef.current.clear();
+    const audio = audioRef.current;
+    if (!audio || audio.state !== "running") return;
+    for (const fill of spec.episode.fills) {
+      const eventProgress = replayEventOffset(fill, spec, settings.duration) / settings.duration;
+      if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
+      soundedEventsRef.current.add(fill.signature);
+      playReplayTone(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
+    }
+  }, [settings.buySound, settings.duration, settings.sellSound, spec]);
 
   const draw = useCallback((next: number) => {
     const canvas = canvasRef.current;
@@ -44,30 +66,55 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
 
   useEffect(() => draw(progress), [draw, progress]);
   useEffect(() => {
+    // Chrome may allow this because Wicklapse was opened from a user click. If not,
+    // the existing context is resumed by the next explicit Play action.
+    void ensureAudio().catch(() => undefined);
+  }, [ensureAudio]);
+  useEffect(() => () => {
+    const audio = audioRef.current;
+    audioRef.current = null;
+    if (audio && audio.state !== "closed") void audio.close();
+  }, []);
+  useEffect(() => {
     if (!playing) return;
     const started = performance.now() - progress * settings.duration * 1_000;
     let frameId = 0;
     const frame = (now: number) => {
       const next = Math.min(1, (now - started) / (settings.duration * 1_000));
+      soundCrossedEvents(previousProgressRef.current, next);
+      previousProgressRef.current = next;
       setProgress(next);
       if (next >= 1) setPlaying(false);
       else frameId = requestAnimationFrame(frame);
     };
     frameId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(frameId);
-  }, [playing, settings.duration]);
+  }, [playing, settings.duration, soundCrossedEvents]);
 
   return (
     <div className="wick-preview">
       <canvas ref={canvasRef} width={960} height={540} />
       <div className="wick-playback">
-        <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={() => {
-          if (progress >= 1) setProgress(0);
-          setPlaying((value) => !value);
+        <button type="button" aria-label={playing ? "Pause" : "Play with sound"} onClick={() => {
+          if (playing) {
+            setPlaying(false);
+            return;
+          }
+          void ensureAudio().catch(() => undefined).then(() => {
+            if (progress >= 1) {
+              previousProgressRef.current = 0;
+              soundedEventsRef.current.clear();
+              setProgress(0);
+            } else previousProgressRef.current = progress;
+            setPlaying(true);
+          });
         }}>{playing ? "Ⅱ" : "▶"}</button>
         <input type="range" min={0} max={1} step={0.001} value={progress} onChange={(event) => {
           setPlaying(false);
-          setProgress(Number(event.target.value));
+          const next = Number(event.target.value);
+          previousProgressRef.current = next;
+          soundedEventsRef.current.clear();
+          setProgress(next);
         }} />
         <span>{(progress * settings.duration).toFixed(1)} / {settings.duration}s</span>
       </div>
