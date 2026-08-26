@@ -73,7 +73,7 @@ describe("createReplaySpec", () => {
   it("keeps auto charts readable and honors supported candle overrides", () => {
     expect(selectCandleRequest(120, "auto").interval).toBe(1);
     expect(selectCandleRequest(10 * 60, "auto").interval).toBe(5);
-    expect(selectCandleRequest(30 * 60, "auto").interval).toBe(60);
+    expect(selectCandleRequest(30 * 60, "auto").interval).toBe(15);
     expect(selectCandleRequest(120, "5s").interval).toBe(5);
     expect(selectCandleRequest(120, "1m").interval).toBe(60);
   });
@@ -100,6 +100,26 @@ describe("createReplaySpec", () => {
     expect(replay.candles).toHaveLength(2);
     expect(replay.candles?.[0]).toMatchObject({ openSol: "1", highSol: "3", lowSol: "0.5", closeSol: "2", volume: "7" });
     expect(replay.candles?.[1]).toMatchObject({ openSol: "3", highSol: "7", lowSol: "2", closeSol: "6", volume: "3" });
+  });
+
+  it("retries at a coarser interval when the preferred OHLCV is sparse", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      if (!url.includes("/ohlcv/")) return new Response(JSON.stringify({ data: { attributes: {} } }), { status: 200 });
+      const rows = url.includes("aggregate=15") ? [
+        [episode.startTimestamp + 30, 2, 3, 1.5, 2.5, 4],
+        [episode.startTimestamp + 15, 1, 2.2, 0.8, 2, 3],
+      ] : [];
+      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: rows } } }), { status: 200 });
+    }));
+    const replay = await createReplaySpec(episode, context, context.walletAddress ?? "", "1s");
+    expect(replay.marketDataSource).toBe("ohlcv");
+    expect(replay.candleIntervalSeconds).toBe(15);
+    expect(requestedUrls.some((url) => url.includes("aggregate=1"))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("aggregate=15"))).toBe(true);
   });
 
   it("uses market candles when the captured pool returns enough history", async () => {

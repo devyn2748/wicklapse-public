@@ -27,7 +27,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
   const audioRef = useRef<AudioContext | null>(null);
   const previousProgressRef = useRef(0);
   const soundedEventsRef = useRef(new Set<string>());
-  const [playing, setPlaying] = useState(true);
+  const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
 
   const ensureAudio = useCallback(async () => {
@@ -69,15 +69,12 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
 
   useEffect(() => draw(progress), [draw, progress]);
   useEffect(() => {
-    // Chrome may allow this because Wicklapse was opened from a user click. If not,
-    // the existing context is resumed by the next explicit Play action.
-    void ensureAudio().catch(() => undefined);
-  }, [ensureAudio]);
-  useEffect(() => {
+    let active = true;
     void ensureAudio().then((audio) => Promise.all([
       prepareReplaySound(audio, settings.buySound),
       prepareReplaySound(audio, settings.sellSound),
-    ])).catch(() => undefined);
+    ])).then(() => { if (active) setPlaying(true); }).catch(() => { if (active) setPlaying(true); });
+    return () => { active = false; };
   }, [ensureAudio, settings.buySound, settings.sellSound]);
   useEffect(() => () => {
     const audio = audioRef.current;
@@ -151,6 +148,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
   const [replayContext, setReplayContext] = useState<ShareContext | null>(null);
   const [candleBusy, setCandleBusy] = useState(false);
+  const candleRequestRef = useRef(0);
   const [status, setStatus] = useState("Preparing Wicklapse…");
   const [error, setError] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
@@ -224,17 +222,20 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const changeCandleInterval = async (value: CandleIntervalPreference) => {
     patch("candleInterval", value);
     if (!spec) return;
+    const requestId = ++candleRequestRef.current;
     setCandleBusy(true);
     setError("");
     try {
       const sourceContext = replayContext ?? context;
       const nextSpec = await createReplaySpec(spec.episode, sourceContext, spec.walletAddress, value);
+      if (requestId !== candleRequestRef.current) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: sourceContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
     } catch (caught) {
+      if (requestId !== candleRequestRef.current) return;
       setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
     } finally {
-      setCandleBusy(false);
+      if (requestId === candleRequestRef.current) setCandleBusy(false);
     }
   };
 
@@ -295,7 +296,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open wallet settings</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
-          <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>16:9 X POST · 1920 × 1080</b></div><Preview spec={spec} settings={settings} /></section>
+          <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>16:9 X POST · 1920 × 1080</b></div><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Candles</h3><span>{candleBusy ? "Refreshing…" : spec.candleIntervalSeconds ? `Using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : `${spec.candleIntervalSeconds / 60}m`}` : "Execution path"}</span></div><Segmented value={settings.candleInterval} options={[{ value: "auto", label: "Auto" }, { value: "1s", label: "1s" }, { value: "5s", label: "5s" }, { value: "1m", label: "1m" }]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>

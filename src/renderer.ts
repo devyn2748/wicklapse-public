@@ -843,7 +843,13 @@ function drawLandscapeReplayFrame(
 
   context.fillStyle = theme.text;
   context.font = `bold ${27 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  context.fillText(`${showMarketCap ? "MARKET CAP" : "PRICE / SOL"}  ·  ${candleIntervalLabel(interval)} CANDLES`, chartX + 34 * unit, chartY + 52 * unit);
+  context.fillText(
+    candles.length
+      ? `${showMarketCap ? "MARKET CAP" : "PRICE / SOL"}  ·  ${candleIntervalLabel(interval)} CANDLES`
+      : "EXECUTION PRICE PATH  ·  OHLCV UNAVAILABLE",
+    chartX + 34 * unit,
+    chartY + 52 * unit,
+  );
 
   const animatedCandles = candles.flatMap((candle, index) => {
     if (candle.timestamp > activeTimestamp) return [];
@@ -961,13 +967,15 @@ function drawLandscapeReplayFrame(
       context.moveTo(visible[0]!.x, visible[0]!.y);
       visible.slice(1).forEach((point) => context.lineTo(point.x, point.y));
       context.strokeStyle = theme.positive;
-      context.lineWidth = 6 * unit;
+      context.lineWidth = 4 * unit;
       context.lineCap = "round";
       context.lineJoin = "round";
+      context.setLineDash([13 * unit, 10 * unit]);
       context.shadowColor = theme.positive;
-      context.shadowBlur = 18 * unit;
+      context.shadowBlur = 10 * unit;
       context.stroke();
       context.shadowBlur = 0;
+      context.setLineDash([]);
       headX = visible.at(-1)!.x;
       headY = visible.at(-1)!.y;
     }
@@ -985,6 +993,7 @@ function drawLandscapeReplayFrame(
       previous.quote = previous.quote.plus(quote);
     } else markers.push({ timestamp: fill.timestamp, side: fill.side, quote, weightedPrice: price });
   }
+  const markerLabels: Array<{ x: number; y: number; width: number; height: number }> = [];
   markers.forEach((marker, index) => {
     if (marker.timestamp > activeTimestamp) return;
     const x = xForTime(marker.timestamp);
@@ -1011,7 +1020,18 @@ function drawLandscapeReplayFrame(
     const labelWidth = context.measureText(label).width + 40 * unit;
     const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);
     const above = marker.side === "buy" ? index % 2 === 0 : index % 2 !== 0;
-    const labelY = clamp(y + (above ? -72 : 35) * unit, chartY + 62 * unit, chartY + chartHeight - 66 * unit);
+    const baseLabelY = y + (above ? -72 : 35) * unit;
+    const labelHeight = 48 * unit;
+    const candidateOffsets = [0, -58, 58, -116, 116].map((offset) => offset * unit);
+    const labelY = candidateOffsets
+      .map((offset) => clamp(baseLabelY + offset, chartY + 62 * unit, chartY + chartHeight - 66 * unit))
+      .find((candidateY) => !markerLabels.some((placed) => (
+        labelX < placed.x + placed.width + 8 * unit
+        && labelX + labelWidth + 8 * unit > placed.x
+        && candidateY < placed.y + placed.height + 6 * unit
+        && candidateY + labelHeight + 6 * unit > placed.y
+      ))) ?? clamp(baseLabelY, chartY + 62 * unit, chartY + chartHeight - 66 * unit);
+    markerLabels.push({ x: labelX, y: labelY, width: labelWidth, height: labelHeight });
     drawPill(context, label, labelX, labelY, {
       fill: "rgba(1, 7, 4, .96)", stroke: `${color}dd`, color,
       fontSize: 25 * unit, paddingX: 20 * unit,

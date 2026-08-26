@@ -172,10 +172,10 @@ function PreviewCanvas({
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<AudioContext | null>(null);
-  const previousProgressRef = useRef(1);
+  const previousProgressRef = useRef(0);
   const soundedEventsRef = useRef(new Set<string>());
   const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(1);
+  const [progress, setProgress] = useState(0);
   const startRef = useRef(0);
 
   const ensureAudio = useCallback(async () => {
@@ -228,6 +228,14 @@ function PreviewCanvas({
   );
 
   useEffect(() => draw(progress), [draw, progress]);
+  useEffect(() => {
+    let active = true;
+    void ensureAudio().then((audio) => Promise.all([
+      prepareReplaySound(audio, settings.buySound, buyCustomBuffer),
+      prepareReplaySound(audio, settings.sellSound, sellCustomBuffer),
+    ])).then(() => { if (active) setPlaying(true); }).catch(() => { if (active) setPlaying(true); });
+    return () => { active = false; };
+  }, [buyCustomBuffer, ensureAudio, sellCustomBuffer, settings.buySound, settings.sellSound]);
   useEffect(() => () => {
     const audio = audioRef.current;
     audioRef.current = null;
@@ -383,6 +391,8 @@ export function StudioApp(): JSX.Element {
   const [buyCustomName, setBuyCustomName] = useState("");
   const [sellCustomName, setSellCustomName] = useState("");
   const [candleBusy, setCandleBusy] = useState(false);
+  const candleRequestRef = useRef(0);
+  const [previewRevision, setPreviewRevision] = useState(0);
 
   useEffect(() => {
     void Promise.all([loadShareContext(), loadRpcSettings(), loadProject(), loadStudioSettings(), loadTradingWalletAddresses()]).then(([share, savedRpc, project, savedSettings, savedWallets]) => {
@@ -419,16 +429,19 @@ export function StudioApp(): JSX.Element {
   const changeCandleInterval = async (value: CandleIntervalPreference) => {
     patchSettings("candleInterval", value);
     if (!spec || !context) return;
+    const requestId = ++candleRequestRef.current;
     setCandleBusy(true);
     setError("");
     try {
       const nextSpec = await createReplaySpec(spec.episode, context, spec.walletAddress, value);
+      if (requestId !== candleRequestRef.current) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: context, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
     } catch (caught) {
+      if (requestId !== candleRequestRef.current) return;
       setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
     } finally {
-      setCandleBusy(false);
+      if (requestId === candleRequestRef.current) setCandleBusy(false);
     }
   };
 
@@ -604,6 +617,7 @@ export function StudioApp(): JSX.Element {
     const bitmap = await createImageBitmap(file);
     backgroundImage?.close();
     setBackgroundImage(bitmap);
+    setPreviewRevision((revision) => revision + 1);
   };
 
   const loadMusic = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -614,6 +628,7 @@ export function StudioApp(): JSX.Element {
       const buffer = await audio.decodeAudioData(await file.arrayBuffer());
       setMusicBuffer(buffer);
       setMusicStart(0);
+      setPreviewRevision((revision) => revision + 1);
     } catch {
       setError("This audio file could not be decoded by Chrome.");
     } finally {
@@ -640,6 +655,7 @@ export function StudioApp(): JSX.Element {
         setSellCustomName(file.name);
         patchSettings("sellSound", "custom");
       }
+      setPreviewRevision((revision) => revision + 1);
       setError("");
     } catch {
       setError("This event-sound file could not be decoded by Chrome.");
@@ -789,7 +805,7 @@ export function StudioApp(): JSX.Element {
               <div><span>Guides: Safe Areas ON</span><b>85%</b></div>
             </div>
             <div className="canvas-stage">
-              <PreviewCanvas spec={spec} settings={settings} backgroundImage={backgroundImage} buyCustomBuffer={buyCustomBuffer} sellCustomBuffer={sellCustomBuffer} />
+              <PreviewCanvas key={`${spec.id}:${JSON.stringify(settings)}:${previewRevision}:${musicStart}`} spec={spec} settings={settings} backgroundImage={backgroundImage} buyCustomBuffer={buyCustomBuffer} sellCustomBuffer={sellCustomBuffer} />
             </div>
             {musicBuffer && <MusicTrimmer buffer={musicBuffer} clipDuration={settings.duration} start={musicStart} onStartChange={setMusicStart} />}
           </section>

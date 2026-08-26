@@ -48,6 +48,9 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
 - Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
 - Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade
+- Sparse-market OHLC recovery with empty-interval fills and progressively coarser provider-supported retries
+- Race-safe candle switching so an older response can never overwrite the newest selection
+- Automatic preview restart from 0:00 after duration, candle, theme, currency, audio, aspect, quality, background, or other studio configuration changes
 - Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
 - Advanced custom Buy/Sell sound uploads (up to 8 MB each) with partial fills consolidated to the same audible event as their visible marker
 - Thirteen bundled Buy/Sell presets—including Hitmarker, Apple Pay, Cash Register, GTA Pickup, Mario Coin, Pop, and Gaming Punch—available by default in both dropdowns

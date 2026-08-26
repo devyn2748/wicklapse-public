@@ -33,6 +33,8 @@ const CANDLE_REQUESTS: CandleRequest[] = [
   // GeckoTerminal has no native 5-second aggregate. Build exact 5s OHLC bars
   // client-side from its supported 1-second response.
   { timeframe: "second", aggregate: 1, interval: 5, sourceInterval: 1 },
+  { timeframe: "second", aggregate: 15, interval: 15, sourceInterval: 15 },
+  { timeframe: "second", aggregate: 30, interval: 30, sourceInterval: 30 },
   { timeframe: "minute", aggregate: 1, interval: 60, sourceInterval: 60 },
   { timeframe: "minute", aggregate: 5, interval: 300, sourceInterval: 300 },
   { timeframe: "minute", aggregate: 15, interval: 900, sourceInterval: 900 },
@@ -47,12 +49,14 @@ export function selectCandleRequest(spanSeconds: number, preference: CandleInter
   const preferredInterval = preference === "1s" ? 1 : preference === "5s" ? 5 : preference === "1m" ? 60 : null;
   const autoInterval = span <= 180 ? 1
     : span <= 900 ? 5
-      : span <= 10_800 ? 60
-        : span <= 54_000 ? 300
-          : span <= 172_800 ? 900
-            : span <= 2_592_000 ? 3_600
-              : span <= 10_368_000 ? 14_400
-                : span <= 31_536_000 ? 43_200 : 86_400;
+      : span <= 2_700 ? 15
+        : span <= 5_400 ? 30
+          : span <= 10_800 ? 60
+            : span <= 54_000 ? 300
+              : span <= 172_800 ? 900
+                : span <= 2_592_000 ? 3_600
+                  : span <= 10_368_000 ? 14_400
+                    : span <= 31_536_000 ? 43_200 : 86_400;
   // GeckoTerminal caps a response at 1,000 bars. Preserve the requested interval
   // whenever it can cover the whole position; otherwise coarsen just enough.
   const minimumCoverageInterval = span / 950;
@@ -158,7 +162,28 @@ async function getMarketHistory(
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
   const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
-  const request = selectCandleRequest(spanSeconds, candleInterval);
+  const preferredRequest = selectCandleRequest(spanSeconds, candleInterval);
+  const preferredIndex = CANDLE_REQUESTS.indexOf(preferredRequest);
+  const seenSources = new Set<string>();
+  const requests = CANDLE_REQUESTS.slice(preferredIndex).filter((request) => {
+    const source = `${request.timeframe}:${request.aggregate}`;
+    if (seenSources.has(source)) return false;
+    seenSources.add(source);
+    return true;
+  }).slice(0, 3);
+  for (const request of requests) {
+    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request);
+    if (result) return result;
+  }
+  return null;
+}
+
+async function getMarketHistoryAtInterval(
+  pairAddress: string,
+  episode: TradeEpisode,
+  spanSeconds: number,
+  request: CandleRequest,
+): Promise<MarketHistory | null> {
   const before = episode.endTimestamp + request.interval * 2;
   const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.sourceInterval) + 4));
   const params = new URLSearchParams({
@@ -167,10 +192,11 @@ async function getMarketHistory(
     limit: String(limit),
     currency: "token",
     token: "base",
+    include_empty_intervals: "true",
   });
   try {
     const response = await fetch(
-      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}/ohlcv/${request.timeframe}?${params}`,
+      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pairAddress)}/ohlcv/${request.timeframe}?${params}`,
       { headers: { accept: "application/json;version=20230203" } },
     );
     if (!response.ok) return null;
