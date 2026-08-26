@@ -40,6 +40,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Compact-row validation, malformed-row isolation, signature deduplication, and chronological normalization
 - Optional Solana wallet/RPC fallback in Advanced
 - In-page Instant Export and full-tab Advanced Workstation
+- Compact right-side Instant panel that leaves the Axiom chart visible and interactive instead of dimming the entire page
 - Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
 - Adaptive GeckoTerminal OHLCV history using 1-second candles for trades up to five minutes, then 1-minute and progressively larger intervals for longer positions
 - Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels, plus an Advanced threshold and overrides for forced K, forced M, or raw token price

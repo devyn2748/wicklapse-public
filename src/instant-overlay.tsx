@@ -255,7 +255,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   };
 
   return (
-    <div className="wick-backdrop" role="dialog" aria-modal="true" aria-label="Wicklapse Instant">
+    <div className="wick-backdrop" role="dialog" aria-modal="false" aria-label="Wicklapse Instant">
       <section className={`wick-modal wick-${view}`}>
         <header className="wick-header">
           <div className="wick-brand"><i>W</i><strong>WICKLAPSE</strong>{view === "instant" && <span>INSTANT EXPORT</span>}</div>
