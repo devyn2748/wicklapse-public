@@ -46,6 +46,8 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels, plus an Advanced threshold and overrides for forced K, forced M, or raw token price
 - Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
+- Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
+- Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade
 - Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
 - Advanced custom Buy/Sell sound uploads (up to 8 MB each) with partial fills consolidated to the same audible event as their visible marker
 - Thirteen bundled Buy/Sell presets—including Hitmarker, Apple Pay, Cash Register, GTA Pickup, Mario Coin, Pop, and Gaming Punch—available by default in both dropdowns

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, createReplaySpec } from "./replay-project";
+import { buildMarkToMarketPoints, createReplaySpec, selectCandleRequest } from "./replay-project";
 
 const fills: TradeFill[] = [
   {
@@ -70,6 +70,38 @@ const context: ShareContext = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("createReplaySpec", () => {
+  it("keeps auto charts readable and honors supported candle overrides", () => {
+    expect(selectCandleRequest(120, "auto").interval).toBe(1);
+    expect(selectCandleRequest(10 * 60, "auto").interval).toBe(5);
+    expect(selectCandleRequest(30 * 60, "auto").interval).toBe(60);
+    expect(selectCandleRequest(120, "5s").interval).toBe(5);
+    expect(selectCandleRequest(120, "1m").interval).toBe(60);
+  });
+
+  it("safely coarsens an override that would truncate a long position", () => {
+    expect(selectCandleRequest(2 * 3_600, "1s").interval).toBeGreaterThanOrEqual(8);
+  });
+
+  it("builds requested five-second candles from supported one-second OHLCV", async () => {
+    const shortEpisode = { ...episode, endTimestamp: episode.startTimestamp + 9 };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      if (!url.includes("/ohlcv/")) return new Response(JSON.stringify({ data: { attributes: {} } }), { status: 200 });
+      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
+        [episode.startTimestamp + 6, 4, 7, 3, 6, 2],
+        [episode.startTimestamp + 5, 3, 5, 2, 4, 1],
+        [episode.startTimestamp + 1, 1, 3, 0.5, 2, 4],
+        [episode.startTimestamp, 1, 2, 0.8, 1, 3],
+      ] } } }), { status: 200 });
+    }));
+    const replay = await createReplaySpec(shortEpisode, context, context.walletAddress ?? "", "5s");
+    expect(replay.candleIntervalSeconds).toBe(5);
+    expect(replay.candles).toHaveLength(2);
+    expect(replay.candles?.[0]).toMatchObject({ openSol: "1", highSol: "3", lowSol: "0.5", closeSol: "2", volume: "7" });
+    expect(replay.candles?.[1]).toMatchObject({ openSol: "3", highSol: "7", lowSol: "2", closeSol: "6", volume: "3" });
+  });
+
   it("uses market candles when the captured pool returns enough history", async () => {
     const requestedUrls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -88,7 +120,7 @@ describe("createReplaySpec", () => {
       ] } } }), { status: 200 });
     }));
 
-    const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
+    const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY", "1m");
     expect(spec.usdPerSol).toBe("180");
     expect(spec.candles).toHaveLength(4);
     expect(spec.candles?.[0]?.timestamp).toBe(1_700_000_060);
@@ -96,7 +128,7 @@ describe("createReplaySpec", () => {
     expect(spec.points[0]?.pnlSol).toBe("-0.000005");
     expect(spec.points.at(-1)?.pnlSol).toBe("1.99999");
     expect(spec.marketCapMultiplier).toBe("400000");
-    expect(requestedUrls.some((url) => url.includes("/ohlcv/second?") && url.includes("aggregate=1") && url.includes("currency=token"))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/ohlcv/minute?") && url.includes("aggregate=1") && url.includes("currency=token"))).toBe(true);
   });
 
   it("marks the position to market instead of showing the initial buy as a loss", () => {
@@ -128,7 +160,7 @@ describe("createReplaySpec", () => {
     expect(requestedUrls.some((url) => url.includes("/ohlcv/hour?") && url.includes("aggregate=1"))).toBe(true);
   });
 
-  it("chooses one-minute candles once a trade is longer than five minutes", async () => {
+  it("chooses five-second candles for a ten-minute trade", async () => {
     const mediumEpisode: TradeEpisode = {
       ...episode,
       fills: [fills[0]!, { ...fills[1]!, timestamp: fills[0]!.timestamp + 10 * 60 }],
@@ -142,7 +174,7 @@ describe("createReplaySpec", () => {
       return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [] } } }), { status: 200 });
     }));
     await createReplaySpec(mediumEpisode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
-    expect(requestedUrls.some((url) => url.includes("/ohlcv/minute?") && url.includes("aggregate=1"))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/ohlcv/second?") && url.includes("aggregate=1"))).toBe(true);
   });
 
   it("falls back to wallet fills when market history is unavailable", async () => {

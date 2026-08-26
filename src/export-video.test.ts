@@ -45,11 +45,20 @@ describe("replay audio timing", () => {
     expect(new Set(BUNDLED_SOUND_PRESETS.map((preset) => preset.file)).size).toBe(13);
   });
 
-  it("uses the same eased landscape timeline as the visible execution marker", () => {
+  it("uses the same duration-aware landscape timeline as the visible execution marker", () => {
     const config = { duration: 8, width: 1920, height: 1080 };
     expect(replayEventOffset(buy, spec, config)).toBeGreaterThan(0.1);
-    expect(replayEventOffset(buy, spec, config)).toBeLessThan(0.2);
-    expect(replayEventOffset(sell, spec, config)).toBeCloseTo(6.4, 5);
+    expect(replayEventOffset(buy, spec, config)).toBeLessThan(0.25);
+    expect(replayEventOffset(sell, spec, config)).toBeCloseTo(7.35, 4);
+  });
+
+  it("slows the replay for longer clips while keeping a fixed short final hold", () => {
+    const middle = fill("middle", 150, "buy");
+    const offset6 = replayEventOffset(middle, spec, { duration: 6, width: 1920, height: 1080 });
+    const offset12 = replayEventOffset(middle, spec, { duration: 12, width: 1920, height: 1080 });
+    expect(offset12).toBeGreaterThan(offset6 + 2.5);
+    expect(6 - replayEventOffset(sell, spec, { duration: 6, width: 1920, height: 1080 })).toBeCloseTo(0.65, 4);
+    expect(12 - replayEventOffset(sell, spec, { duration: 12, width: 1920, height: 1080 })).toBeCloseTo(0.65, 4);
   });
 
   it("consolidates same-side partial fills that share a visible marker window", () => {

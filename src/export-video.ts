@@ -143,7 +143,7 @@ export function replayEventOffset(
   spec: ReplaySpec,
   config: Pick<RenderConfig, "duration" | "width" | "height">,
 ): number {
-  const offset = replayEventVisualProgress(fill, spec, config.width, config.height) * config.duration;
+  const offset = replayEventVisualProgress(fill, spec, config.width, config.height, config.duration) * config.duration;
   return Math.max(0.01, Math.min(config.duration - 0.01, offset));
 }
 

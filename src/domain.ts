@@ -155,6 +155,7 @@ export interface ReplaySpec {
   usdPerSol: string | null;
   verified: boolean;
   marketDataSource?: "ohlcv" | "fills";
+  candleIntervalSeconds?: number;
   tradeDataSource?: "rpc" | "axiom";
 }
 

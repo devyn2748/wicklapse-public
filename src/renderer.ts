@@ -164,15 +164,33 @@ function eventProgress(fill: TradeFill, spec: ReplaySpec): number {
   return clamp((fill.timestamp - start) / span);
 }
 
-function inverseEaseOut(value: number): number {
-  return 1 - Math.cbrt(1 - clamp(value));
+const REPLAY_END_HOLD_SECONDS = 0.65;
+
+function replayEase(value: number): number {
+  const x = clamp(value);
+  const smoothStep = x * x * (3 - 2 * x);
+  // Keep the chart moving for the whole clip while retaining a soft start and stop.
+  return x * 0.72 + smoothStep * 0.28;
 }
 
-function inverseEaseInOut(value: number): number {
-  const y = clamp(value);
-  return y < 0.5
-    ? Math.cbrt(y / 4)
-    : 1 - Math.cbrt((1 - y) / 4);
+function inverseReplayEase(value: number): number {
+  const target = clamp(value);
+  let low = 0;
+  let high = 1;
+  for (let index = 0; index < 20; index += 1) {
+    const middle = (low + high) / 2;
+    if (replayEase(middle) < target) low = middle;
+    else high = middle;
+  }
+  return (low + high) / 2;
+}
+
+function replayWindow(duration: number, landscape: boolean): { start: number; end: number } {
+  const safeDuration = Math.max(1, duration);
+  const startSeconds = landscape ? 0.12 : 0.24;
+  const start = clamp(startSeconds / safeDuration, 0.008, 0.06);
+  const end = clamp(1 - REPLAY_END_HOLD_SECONDS / safeDuration, start + 0.5, 0.97);
+  return { start, end };
 }
 
 function replayCandleInterval(spec: ReplaySpec): number {
@@ -185,9 +203,11 @@ function replayCandleInterval(spec: ReplaySpec): number {
 }
 
 /** Returns the video progress where the renderer first reveals an execution marker. */
-export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, width: number, height: number): number {
-  if (width / height < 1.45) {
-    return 0.08 + inverseEaseInOut(eventProgress(fill, spec)) * (0.79 - 0.08);
+export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, width: number, height: number, duration: number): number {
+  const landscape = width / height >= 1.45;
+  const window = replayWindow(duration, landscape);
+  if (!landscape) {
+    return window.start + inverseReplayEase(eventProgress(fill, spec)) * (window.end - window.start);
   }
   const points = [...spec.points].sort((left, right) => left.timestamp - right.timestamp);
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
@@ -198,7 +218,7 @@ export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, wid
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)?.timestamp ?? spec.episode.endTimestamp,
   );
   const reveal = clamp((fill.timestamp - chartStart) / Math.max(1, chartEnd - chartStart));
-  return 0.015 + inverseEaseOut(reveal) * (0.8 - 0.015);
+  return window.start + inverseReplayEase(reveal) * (window.end - window.start);
 }
 
 function interpolateReplay(points: ReplayPoint[], spec: ReplaySpec, timeline: number): { price: number; pnl: Decimal } {
@@ -724,8 +744,8 @@ function drawLandscapeReplayFrame(
   );
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = easeOut(phase(progress, 0, 0.08));
-  // Move quickly enough to feel active in a short social clip, then hold the completed trade.
-  const chartReveal = easeOut(phase(progress, 0.015, 0.8));
+  const replayTiming = replayWindow(config.duration, true);
+  const chartReveal = replayEase(phase(progress, replayTiming.start, replayTiming.end));
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
@@ -1049,7 +1069,8 @@ export function drawReplayFrame(
     ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)
     : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
   const intro = easeOut(phase(progress, 0, 0.1));
-  const chartReveal = easeInOut(phase(progress, 0.08, 0.79));
+  const replayTiming = replayWindow(config.duration, false);
+  const chartReveal = replayEase(phase(progress, replayTiming.start, replayTiming.end));
   const active = interpolateReplay(points, spec, chartReveal);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
   const soldSol = new Decimal(spec.episode.totalSoldLamports).div(1_000_000_000);
@@ -1345,7 +1366,7 @@ export function drawReplayFrame(
   }
 
   // Dense bottom stats eliminate dead space and make the post screenshot-worthy.
-  const summaryIntro = easeOut(phase(progress, 0.76, 0.9));
+  const summaryIntro = easeOut(phase(progress, Math.max(replayTiming.start, replayTiming.end - 0.1), Math.min(0.99, replayTiming.end + 0.025)));
   const summarySlide = (1 - summaryIntro) * 22 * unit;
   context.save();
   context.globalAlpha = 0.25 + summaryIntro * 0.75;

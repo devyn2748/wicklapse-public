@@ -19,19 +19,45 @@ interface PoolPayload {
 interface MarketHistory {
   candles: ReplayCandle[];
   points: ReplayPoint[];
+  interval: number;
 }
+
+export type CandleIntervalPreference = "auto" | "1s" | "5s" | "1m";
 
 const LAMPORTS = new Decimal(1_000_000_000);
 
-function selectCandleRequest(spanSeconds: number): { timeframe: "second" | "minute" | "hour" | "day"; aggregate: number; interval: number } {
-  if (spanSeconds <= 5 * 60) return { timeframe: "second", aggregate: 1, interval: 1 };
-  if (spanSeconds <= 3 * 3_600) return { timeframe: "minute", aggregate: 1, interval: 60 };
-  if (spanSeconds <= 15 * 3_600) return { timeframe: "minute", aggregate: 5, interval: 300 };
-  if (spanSeconds <= 2 * 86_400) return { timeframe: "minute", aggregate: 15, interval: 900 };
-  if (spanSeconds <= 30 * 86_400) return { timeframe: "hour", aggregate: 1, interval: 3_600 };
-  if (spanSeconds <= 120 * 86_400) return { timeframe: "hour", aggregate: 4, interval: 14_400 };
-  if (spanSeconds <= 365 * 86_400) return { timeframe: "hour", aggregate: 12, interval: 43_200 };
-  return { timeframe: "day", aggregate: 1, interval: 86_400 };
+type CandleRequest = { timeframe: "second" | "minute" | "hour" | "day"; aggregate: number; interval: number; sourceInterval: number };
+
+const CANDLE_REQUESTS: CandleRequest[] = [
+  { timeframe: "second", aggregate: 1, interval: 1, sourceInterval: 1 },
+  // GeckoTerminal has no native 5-second aggregate. Build exact 5s OHLC bars
+  // client-side from its supported 1-second response.
+  { timeframe: "second", aggregate: 1, interval: 5, sourceInterval: 1 },
+  { timeframe: "minute", aggregate: 1, interval: 60, sourceInterval: 60 },
+  { timeframe: "minute", aggregate: 5, interval: 300, sourceInterval: 300 },
+  { timeframe: "minute", aggregate: 15, interval: 900, sourceInterval: 900 },
+  { timeframe: "hour", aggregate: 1, interval: 3_600, sourceInterval: 3_600 },
+  { timeframe: "hour", aggregate: 4, interval: 14_400, sourceInterval: 14_400 },
+  { timeframe: "hour", aggregate: 12, interval: 43_200, sourceInterval: 43_200 },
+  { timeframe: "day", aggregate: 1, interval: 86_400, sourceInterval: 86_400 },
+];
+
+export function selectCandleRequest(spanSeconds: number, preference: CandleIntervalPreference = "auto"): CandleRequest {
+  const span = Math.max(1, spanSeconds);
+  const preferredInterval = preference === "1s" ? 1 : preference === "5s" ? 5 : preference === "1m" ? 60 : null;
+  const autoInterval = span <= 180 ? 1
+    : span <= 900 ? 5
+      : span <= 10_800 ? 60
+        : span <= 54_000 ? 300
+          : span <= 172_800 ? 900
+            : span <= 2_592_000 ? 3_600
+              : span <= 10_368_000 ? 14_400
+                : span <= 31_536_000 ? 43_200 : 86_400;
+  // GeckoTerminal caps a response at 1,000 bars. Preserve the requested interval
+  // whenever it can cover the whole position; otherwise coarsen just enough.
+  const minimumCoverageInterval = span / 950;
+  const targetInterval = Math.max(preferredInterval ?? autoInterval, minimumCoverageInterval);
+  return CANDLE_REQUESTS.find((request) => request.interval >= targetInterval) ?? CANDLE_REQUESTS.at(-1)!;
 }
 
 async function getMarketCapMultiplier(context: ShareContext): Promise<string | null> {
@@ -95,6 +121,25 @@ export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCa
   return points.filter((point, index) => index === 0 || point.timestamp !== points[index - 1]!.timestamp);
 }
 
+function aggregateCandles(candles: ReplayCandle[], interval: number): ReplayCandle[] {
+  if (interval <= 1) return candles;
+  const groups = new Map<number, ReplayCandle[]>();
+  for (const candle of candles) {
+    const timestamp = Math.floor(candle.timestamp / interval) * interval;
+    const group = groups.get(timestamp) ?? [];
+    group.push(candle);
+    groups.set(timestamp, group);
+  }
+  return [...groups.entries()].sort(([left], [right]) => left - right).map(([timestamp, group]) => ({
+    timestamp,
+    openSol: group[0]!.openSol,
+    highSol: String(Math.max(...group.map((candle) => Number(candle.highSol)))),
+    lowSol: String(Math.min(...group.map((candle) => Number(candle.lowSol)))),
+    closeSol: group.at(-1)!.closeSol,
+    volume: group.reduce((total, candle) => total.plus(candle.volume), new Decimal(0)).toString(),
+  }));
+}
+
 async function getUsdPerSol(): Promise<string | null> {
   try {
     const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
@@ -109,12 +154,13 @@ async function getUsdPerSol(): Promise<string | null> {
 async function getMarketHistory(
   context: ShareContext,
   episode: TradeEpisode,
+  candleInterval: CandleIntervalPreference,
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
   const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
-  const request = selectCandleRequest(spanSeconds);
+  const request = selectCandleRequest(spanSeconds, candleInterval);
   const before = episode.endTimestamp + request.interval * 2;
-  const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.interval) + 4));
+  const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.sourceInterval) + 4));
   const params = new URLSearchParams({
     aggregate: String(request.aggregate),
     before_timestamp: String(before),
@@ -129,7 +175,7 @@ async function getMarketHistory(
     );
     if (!response.ok) return null;
     const payload = (await response.json()) as OhlcvPayload;
-    const candles = (payload.data?.attributes?.ohlcv_list ?? [])
+    const sourceCandles = (payload.data?.attributes?.ohlcv_list ?? [])
       .filter(isFiniteCandle)
       .filter(([timestamp]) => timestamp >= episode.startTimestamp - request.interval && timestamp <= episode.endTimestamp + request.interval)
       .map(([timestamp, open, high, low, close, volume]): ReplayCandle => ({
@@ -141,8 +187,11 @@ async function getMarketHistory(
         volume: String(volume),
       }))
       .sort((a, b) => a.timestamp - b.timestamp);
+    const candles = request.interval === request.sourceInterval
+      ? sourceCandles
+      : aggregateCandles(sourceCandles, request.interval);
     if (candles.length < 2) return null;
-    return { candles, points: buildMarkToMarketPoints(episode, candles) };
+    return { candles, points: buildMarkToMarketPoints(episode, candles), interval: request.interval };
   } catch {
     return null;
   }
@@ -152,12 +201,13 @@ export async function createReplaySpec(
   episode: TradeEpisode,
   context: ShareContext,
   walletAddress: string,
+  candleInterval: CandleIntervalPreference = "auto",
 ): Promise<ReplaySpec> {
   const fillPoints = buildReplayPoints(episode);
   const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(),
-    getMarketHistory(context, episode),
+    getMarketHistory(context, episode, candleInterval),
     getMarketCapMultiplier(context),
   ]);
   return {
@@ -175,6 +225,7 @@ export async function createReplaySpec(
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,
     marketDataSource: marketHistory ? "ohlcv" : "fills",
+    candleIntervalSeconds: marketHistory?.interval,
     tradeDataSource,
   };
 }

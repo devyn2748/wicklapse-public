@@ -16,6 +16,7 @@ export interface StudioSettings {
   chartMetric: "marketCap" | "price";
   marketCapFormat: "auto" | "thousands" | "millions";
   marketCapThreshold: number;
+  candleInterval: "auto" | "1s" | "5s" | "1m";
 }
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -32,6 +33,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   chartMetric: "marketCap",
   marketCapFormat: "auto",
   marketCapThreshold: 1_000_000,
+  candleInterval: "auto",
 };
 
 export const ASPECT_PRESETS = [
