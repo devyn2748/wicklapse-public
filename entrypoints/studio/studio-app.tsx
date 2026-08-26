@@ -21,9 +21,10 @@ import {
 } from "../../src/domain";
 import { normalizeWalletAddresses } from "../../src/axiom-api";
 import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
+import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildReplayPoints, buildTradeEpisodes, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
-import { createReplaySpec, type CandleIntervalPreference } from "../../src/replay-project";
+import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
 import {
@@ -391,7 +392,7 @@ export function StudioApp(): JSX.Element {
   const [buyCustomName, setBuyCustomName] = useState("");
   const [sellCustomName, setSellCustomName] = useState("");
   const [candleBusy, setCandleBusy] = useState(false);
-  const candleRequestRef = useRef(0);
+  const replayRequestRef = useRef(new LatestReplayRequest());
   const [previewRevision, setPreviewRevision] = useState(0);
 
   useEffect(() => {
@@ -416,7 +417,16 @@ export function StudioApp(): JSX.Element {
     });
   }, []);
 
+  useEffect(() => () => replayRequestRef.current.cancel(), []);
+
   const selectedEpisode = episodes.find((episode) => episode.id === selectedEpisodeId) ?? episodes[0] ?? null;
+  const allowedCandleIntervals = useMemo(
+    () => spec ? selectAllowedIntervals(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp)) : [],
+    [spec],
+  );
+  const displayedCandleInterval = allowedCandleIntervals.some((value) => value === settings.candleInterval)
+    ? settings.candleInterval
+    : "auto";
 
   const patchSettings = <K extends keyof StudioSettings>(key: K, value: StudioSettings[K]) => {
     setSettings((current) => {
@@ -429,19 +439,19 @@ export function StudioApp(): JSX.Element {
   const changeCandleInterval = async (value: CandleIntervalPreference) => {
     patchSettings("candleInterval", value);
     if (!spec || !context) return;
-    const requestId = ++candleRequestRef.current;
+    const request = replayRequestRef.current.begin();
     setCandleBusy(true);
     setError("");
     try {
-      const nextSpec = await createReplaySpec(spec.episode, context, spec.walletAddress, value);
-      if (requestId !== candleRequestRef.current) return;
+      const nextSpec = await createReplaySpec(spec.episode, context, spec.walletAddress, value, request.signal);
+      if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: context, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
     } catch (caught) {
-      if (requestId !== candleRequestRef.current) return;
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
       setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
     } finally {
-      if (requestId === candleRequestRef.current) setCandleBusy(false);
+      if (replayRequestRef.current.isLatest(request.id)) setCandleBusy(false);
     }
   };
 
@@ -555,9 +565,16 @@ export function StudioApp(): JSX.Element {
       pairAddress: null, symbol: "TOKEN", tokenName: null, walletAddress: null, walletLabel: null, boughtSol: null,
       soldSol: null, holdingSol: null, pnlSol: null, roiPercent: null, positionStatus: "unknown" as const, sourceText: "",
     };
-    const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, sourceContext.walletAddress ?? rpc.walletAddress, settings.candleInterval);
-    setSpec(nextSpec);
-    setStage("studio");
+    const request = replayRequestRef.current.begin();
+    try {
+      const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, sourceContext.walletAddress ?? rpc.walletAddress, settings.candleInterval, request.signal);
+      if (!replayRequestRef.current.isLatest(request.id)) return;
+      setSpec(nextSpec);
+      setStage("studio");
+    } catch (caught) {
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
+      setError(caught instanceof Error ? caught.message : "Could not build this replay.");
+    }
   };
 
   const exportVideo = async () => {
@@ -834,7 +851,7 @@ export function StudioApp(): JSX.Element {
             <section className="inspector-card" id="advanced-chart">
               <h3>⌁ Chart presentation</h3>
               <div className="inspector-grid">
-                <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : `${spec.candleIntervalSeconds / 60}m`}` : ""}</span><Segmented value={settings.candleInterval} options={[{ value: "auto", label: "Auto" }, { value: "1s", label: "1s" }, { value: "5s", label: "5s" }, { value: "1m", label: "1m" }]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
+                <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : ""}</span><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
                 <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
                 <div className="field-group"><span>Market-cap labels</span><Segmented value={settings.marketCapFormat} options={[{ value: "auto", label: "Auto K/M" }, { value: "thousands", label: "Force K" }, { value: "millions", label: "Force M" }]} onChange={(value) => patchSettings("marketCapFormat", value)} /></div>
                 <label>Auto K→M threshold<input type="number" min={1_000} max={1_000_000_000} step={100_000} value={settings.marketCapThreshold} onChange={(event) => patchSettings("marketCapThreshold", Math.max(1_000, Number(event.target.value) || 1_000_000))} /></label>

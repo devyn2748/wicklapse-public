@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
+import { sanitizeAxiomChartUrl } from "../../src/axiom-candles";
 import { ShareContextSchema, type ShareContext } from "../../src/domain";
 import { InstantOverlay } from "../../src/instant-overlay";
 import overlayStyles from "../../src/instant-overlay.css?inline";
@@ -48,6 +49,23 @@ function base58From(value: string): string | null {
 
 function findPairAddress(): string | null {
   return pairAddressFromAxiomUrl(location.href);
+}
+
+function findAxiomChartUrl(): string | null {
+  const pairAddress = findPairAddress();
+  const entries = performance.getEntriesByType("resource").slice().reverse();
+  for (const entry of entries) {
+    try {
+      const url = new URL(entry.name);
+      const isAxiomHost = url.hostname === "axiom.trade" || url.hostname.endsWith(".axiom.trade");
+      if (!isAxiomHost || !url.pathname.endsWith("/pair-chart-v3")) continue;
+      if (pairAddress && url.searchParams.get("pairAddress") !== pairAddress) continue;
+      return sanitizeAxiomChartUrl(url.toString(), pairAddress);
+    } catch {
+      // Ignore unrelated or non-URL performance entries.
+    }
+  }
+  return null;
 }
 
 function findMint(): string | null {
@@ -146,6 +164,7 @@ function buildShareContext(): ShareContext {
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
+    axiomChartUrl: findAxiomChartUrl(),
     walletAddress: null,
     walletLabel: null,
     boughtSol: summaryUsesSol ? numberAfterLabel(summaryText, ["Bought", "Invested"]) : null,

@@ -194,12 +194,14 @@ function replayWindow(duration: number, landscape: boolean): { start: number; en
 }
 
 function replayCandleInterval(spec: ReplaySpec): number {
-  const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
-  if (candles.length > 1) {
-    const middle = Math.floor(candles.length / 2);
-    return Math.max(1, candles[middle]!.timestamp - candles[middle - 1]!.timestamp);
+  if (spec.candleIntervalSeconds && Number.isFinite(spec.candleIntervalSeconds)) {
+    return Math.max(1, spec.candleIntervalSeconds);
   }
   return Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+}
+
+function hasMarketCandles(spec: ReplaySpec): boolean {
+  return Boolean(spec.candles?.length) && spec.marketDataSource !== "fills";
 }
 
 /** Returns the video progress where the renderer first reveals an execution marker. */
@@ -539,7 +541,7 @@ function drawLegacyLandscapeReplayFrame(
   context.stroke();
   context.fillStyle = theme.muted;
   context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  context.fillText(spec.marketDataSource === "ohlcv" ? "PRICE ACTION" : "EXECUTION PRICE PATH", chartX + 28 * unit, chartY + 38 * unit);
+  context.fillText(hasMarketCandles(spec) ? "PRICE ACTION" : "EXECUTION PRICE PATH", chartX + 28 * unit, chartY + 38 * unit);
   context.textAlign = "right";
   context.fillStyle = theme.positive;
   context.font = `bold ${17 * unit}px ui-monospace, SFMono-Regular, monospace`;
@@ -683,7 +685,7 @@ function drawLegacyLandscapeReplayFrame(
   if (peakPoint && chartReveal >= peakPoint.at) {
     const peakIntro = easeOut(peakPoint.at >= 0.999 ? phase(progress, 0.76, 0.9) : phase(chartReveal, peakPoint.at, Math.min(1, peakPoint.at + 0.1)));
     context.globalAlpha = peakIntro;
-    const peakLabel = `${spec.marketDataSource === "ohlcv" ? "◆ ATH" : "◆ PEAK EXECUTION"} ${formatPrice(prices[peakIndex] ?? 0)}`;
+    const peakLabel = `${hasMarketCandles(spec) ? "◆ ATH" : "◆ PEAK EXECUTION"} ${formatPrice(prices[peakIndex] ?? 0)}`;
     context.font = `bold ${16 * unit}px ui-monospace, SFMono-Regular, monospace`;
     const peakWidth = context.measureText(peakLabel).width + 34 * unit;
     drawPill(context, peakLabel, clamp(peakPoint.x - peakWidth / 2, chartX + 18 * unit, chartX + chartWidth - peakWidth - 18 * unit), Math.max(chartY + 55 * unit, peakPoint.y - 72 * unit), {
@@ -851,10 +853,9 @@ function drawLandscapeReplayFrame(
     chartY + 52 * unit,
   );
 
-  const animatedCandles = candles.flatMap((candle, index) => {
+  const animatedCandles = candles.flatMap((candle) => {
     if (candle.timestamp > activeTimestamp) return [];
-    const nextTimestamp = candles[index + 1]?.timestamp ?? chartEnd;
-    const local = clamp((activeTimestamp - candle.timestamp) / Math.max(1, nextTimestamp - candle.timestamp));
+    const local = clamp((activeTimestamp - candle.timestamp) / interval);
     const open = Number(candle.openSol);
     const finalHigh = Number(candle.highSol);
     const finalLow = Number(candle.lowSol);
@@ -1352,7 +1353,7 @@ export function drawReplayFrame(
   // Chart labels sit outside the clip and remain readable on every theme.
   context.fillStyle = theme.muted;
   context.font = `bold ${9.5 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  context.fillText(spec.marketDataSource === "ohlcv" ? "PRICE ACTION" : "EXECUTION PRICE PATH", chartX + 18 * unit, chartY + 22 * unit);
+  context.fillText(hasMarketCandles(spec) ? "PRICE ACTION" : "EXECUTION PRICE PATH", chartX + 18 * unit, chartY + 22 * unit);
   context.textAlign = "right";
   context.fillStyle = theme.positive;
   context.fillText(`LIVE  ${formatPrice(active.price)}`, chartX + chartWidth - 18 * unit, chartY + 22 * unit);
@@ -1372,7 +1373,7 @@ export function drawReplayFrame(
       ? phase(progress, 0.76, 0.9)
       : phase(chartReveal, peakPoint.at, Math.min(1, peakPoint.at + 0.1)));
     context.globalAlpha = peakIntro;
-    const peakLabel = `${spec.marketDataSource === "ohlcv" ? "◆ ATH" : "◆ PEAK EXECUTION"} ${formatPrice(prices[peakIndex] ?? 0)}`;
+    const peakLabel = `${hasMarketCandles(spec) ? "◆ ATH" : "◆ PEAK EXECUTION"} ${formatPrice(prices[peakIndex] ?? 0)}`;
     context.font = `bold ${11 * unit}px ui-monospace, SFMono-Regular, monospace`;
     const peakWidth = context.measureText(peakLabel).width + 24 * unit;
     drawPill(context, peakLabel, clamp(peakPoint.x - peakWidth / 2, chartX + 10 * unit, chartX + chartWidth - peakWidth - 10 * unit), Math.max(chartY + 36 * unit, peakPoint.y - 54 * unit), {

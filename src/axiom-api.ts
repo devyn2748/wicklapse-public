@@ -78,7 +78,7 @@ export function parseAxiomTransactionRow(
 
   const parsed = TradeExecutionSchema.safeParse({
     side,
-    timestamp: Math.floor(timestampMs / 1_000),
+    timestamp: timestampMs / 1_000,
     tokenAmount,
     priceSol,
     priceUsd,

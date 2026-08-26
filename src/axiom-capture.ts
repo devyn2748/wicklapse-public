@@ -60,7 +60,6 @@ export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode
 
   const chronological = [...context.tradeExecutions]
     .sort((left, right) => left.timestamp - right.timestamp || left.signature.localeCompare(right.signature));
-  let lastTimestamp = 0;
   let tokenPosition = new Decimal(0);
   const fills: TradeFill[] = chronological.map((execution: TradeExecution) => {
     const tokenAmount = new Decimal(execution.tokenAmount);
@@ -69,12 +68,10 @@ export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode
     if (tokenPosition.isNegative()) tokenPosition = new Decimal(0);
     const rawPosition = tokenPosition.mul(TOKEN_SCALE).toDecimalPlaces(0).toFixed(0);
     const rawAmount = tokenAmount.mul(TOKEN_SCALE).toDecimalPlaces(0).toFixed(0);
-    const timestamp = Math.max(execution.timestamp, lastTimestamp + 1);
-    lastTimestamp = timestamp;
     return {
       signature: execution.signature,
       slot: 0,
-      timestamp,
+      timestamp: execution.timestamp,
       side: execution.side,
       tokenMint,
       tokenDecimals: TOKEN_DECIMALS,
@@ -94,6 +91,9 @@ export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode
   if (context.positionStatus === "closed" && fills.length) fills[fills.length - 1]!.walletPostTokenRaw = "0";
   return buildTradeEpisodes(fills, context).map((episode) => ({
     ...episode,
+    endTimestamp: episode.status === "open"
+      ? Math.max(episode.endTimestamp, context.capturedAt / 1_000)
+      : episode.endTimestamp,
     matchLabel: "Axiom capture",
   }));
 }

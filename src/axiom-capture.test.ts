@@ -102,4 +102,56 @@ describe("buildAxiomCaptureEpisodes", () => {
     expect(episode?.approximatePnlLamports).toBe("2500000000");
     expect(episode?.matchLabel).toBe("Axiom capture");
   });
+
+  it("preserves sub-second timing and splits a re-entry after a full exit", () => {
+    const pairAddress = "4".repeat(44);
+    const wallet = "5".repeat(44);
+    const execution = (
+      signature: string,
+      side: "buy" | "sell",
+      timestamp: number,
+      tokenAmount: string,
+    ) => ({
+      signature,
+      side,
+      timestamp,
+      tokenAmount,
+      priceSol: "0.01",
+      priceUsd: "1",
+      totalSol: "1",
+      totalUsd: "100",
+      wallet,
+      pairAddress,
+      source: "axiom" as const,
+    });
+    const context: ShareContext = {
+      id: "re-entry",
+      capturedAt: 1_800_000_000_000,
+      pageUrl: `https://axiom.trade/meme/${pairAddress}`,
+      tokenMint: "6".repeat(44),
+      pairAddress,
+      symbol: "TEST",
+      tokenName: null,
+      walletAddress: wallet,
+      walletLabel: null,
+      boughtSol: null,
+      soldSol: null,
+      holdingSol: null,
+      pnlSol: null,
+      roiPercent: null,
+      positionStatus: "unknown",
+      sourceText: "",
+      tradeExecutions: [
+        execution("7".repeat(88), "buy", 1_799_000_000.1, "100"),
+        execution("8".repeat(88), "sell", 1_799_000_000.7, "100"),
+        execution("9".repeat(88), "buy", 1_799_000_001.2, "50"),
+      ],
+    };
+
+    const episodes = buildAxiomExecutionEpisodes(context);
+    expect(episodes).toHaveLength(2);
+    expect(episodes.flatMap((item) => item.fills.map((fill) => fill.timestamp)).sort())
+      .toEqual([1_799_000_000.1, 1_799_000_000.7, 1_799_000_001.2]);
+    expect(episodes.map((item) => item.status).sort()).toEqual(["closed", "open"]);
+  });
 });

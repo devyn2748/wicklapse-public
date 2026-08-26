@@ -1,6 +1,14 @@
 import Decimal from "decimal.js";
 import type { ReplayCandle, ReplayPoint, ReplaySpec, ShareContext, TradeEpisode } from "./domain";
 import { buildReplayPoints } from "./episodes";
+import {
+  fetchAxiomCandles,
+  intervalSeconds,
+  selectAxiomInterval,
+  type CandleIntervalPreference,
+} from "./axiom-candles";
+
+export type { CandleIntervalPreference } from "./axiom-candles";
 
 interface OhlcvPayload {
   data?: { attributes?: { ohlcv_list?: Array<[number, number, number, number, number, number]> } };
@@ -20,9 +28,8 @@ interface MarketHistory {
   candles: ReplayCandle[];
   points: ReplayPoint[];
   interval: number;
+  source: "axiom" | "gecko";
 }
-
-export type CandleIntervalPreference = "auto" | "1s" | "5s" | "1m";
 
 const LAMPORTS = new Decimal(1_000_000_000);
 
@@ -36,8 +43,10 @@ const CANDLE_REQUESTS: CandleRequest[] = [
   { timeframe: "second", aggregate: 15, interval: 15, sourceInterval: 15 },
   { timeframe: "second", aggregate: 30, interval: 30, sourceInterval: 30 },
   { timeframe: "minute", aggregate: 1, interval: 60, sourceInterval: 60 },
+  { timeframe: "minute", aggregate: 3, interval: 180, sourceInterval: 180 },
   { timeframe: "minute", aggregate: 5, interval: 300, sourceInterval: 300 },
   { timeframe: "minute", aggregate: 15, interval: 900, sourceInterval: 900 },
+  { timeframe: "minute", aggregate: 30, interval: 1_800, sourceInterval: 1_800 },
   { timeframe: "hour", aggregate: 1, interval: 3_600, sourceInterval: 3_600 },
   { timeframe: "hour", aggregate: 4, interval: 14_400, sourceInterval: 14_400 },
   { timeframe: "hour", aggregate: 12, interval: 43_200, sourceInterval: 43_200 },
@@ -45,31 +54,42 @@ const CANDLE_REQUESTS: CandleRequest[] = [
 ];
 
 export function selectCandleRequest(spanSeconds: number, preference: CandleIntervalPreference = "auto"): CandleRequest {
-  const span = Math.max(1, spanSeconds);
-  const preferredInterval = preference === "1s" ? 1 : preference === "5s" ? 5 : preference === "1m" ? 60 : null;
-  const autoInterval = span <= 180 ? 1
-    : span <= 900 ? 5
-      : span <= 2_700 ? 15
-        : span <= 5_400 ? 30
-          : span <= 10_800 ? 60
-            : span <= 54_000 ? 300
-              : span <= 172_800 ? 900
-                : span <= 2_592_000 ? 3_600
-                  : span <= 10_368_000 ? 14_400
-                    : span <= 31_536_000 ? 43_200 : 86_400;
-  // GeckoTerminal caps a response at 1,000 bars. Preserve the requested interval
-  // whenever it can cover the whole position; otherwise coarsen just enough.
-  const minimumCoverageInterval = span / 950;
-  const targetInterval = Math.max(preferredInterval ?? autoInterval, minimumCoverageInterval);
-  return CANDLE_REQUESTS.find((request) => request.interval >= targetInterval) ?? CANDLE_REQUESTS.at(-1)!;
+  const selected = selectAxiomInterval(spanSeconds, preference);
+  const targetInterval = CANDLE_REQUESTS.find((request) => request.interval === intervalSeconds(selected));
+  return targetInterval ?? CANDLE_REQUESTS.at(-1)!;
 }
 
-async function getMarketCapMultiplier(context: ShareContext): Promise<string | null> {
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+export class LatestReplayRequest {
+  private requestId = 0;
+  private controller: AbortController | null = null;
+
+  begin(): { id: number; signal: AbortSignal } {
+    this.controller?.abort();
+    this.controller = new AbortController();
+    return { id: ++this.requestId, signal: this.controller.signal };
+  }
+
+  isLatest(id: number): boolean {
+    return id === this.requestId && !this.controller?.signal.aborted;
+  }
+
+  cancel(): void {
+    this.controller?.abort();
+    this.controller = null;
+    this.requestId += 1;
+  }
+}
+
+async function getMarketCapMultiplier(context: ShareContext, signal?: AbortSignal): Promise<string | null> {
   if (!context.pairAddress) return null;
   try {
     const response = await fetch(
       `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}`,
-      { headers: { accept: "application/json;version=20230203" } },
+      { headers: { accept: "application/json;version=20230203" }, signal },
     );
     if (!response.ok) return null;
     const attributes = ((await response.json()) as PoolPayload).data?.attributes;
@@ -77,7 +97,8 @@ async function getMarketCapMultiplier(context: ShareContext): Promise<string | n
     const marketCap = new Decimal(attributes?.market_cap_usd ?? attributes?.fdv_usd ?? 0);
     if (!nativePrice.isFinite() || !marketCap.isFinite() || nativePrice.lte(0) || marketCap.lte(0)) return null;
     return marketCap.div(nativePrice).toString();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     return null;
   }
 }
@@ -144,13 +165,14 @@ function aggregateCandles(candles: ReplayCandle[], interval: number): ReplayCand
   }));
 }
 
-async function getUsdPerSol(): Promise<string | null> {
+async function getUsdPerSol(signal?: AbortSignal): Promise<string | null> {
   try {
-    const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+    const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal });
     if (!response.ok) return null;
     const payload = await response.json();
     return payload?.solana?.usd ? String(payload.solana.usd) : null;
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     return null;
   }
 }
@@ -159,9 +181,24 @@ async function getMarketHistory(
   context: ShareContext,
   episode: TradeEpisode,
   candleInterval: CandleIntervalPreference,
+  signal?: AbortSignal,
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
   const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  if (episode.fills.some((fill) => fill.source === "axiom")) {
+    try {
+      const axiom = await fetchAxiomCandles(context, episode, candleInterval, { signal });
+      if (axiom) {
+        return {
+          ...axiom,
+          points: buildMarkToMarketPoints(episode, axiom.candles),
+          source: "axiom",
+        };
+      }
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+    }
+  }
   const preferredRequest = selectCandleRequest(spanSeconds, candleInterval);
   const preferredIndex = CANDLE_REQUESTS.indexOf(preferredRequest);
   const seenSources = new Set<string>();
@@ -172,7 +209,7 @@ async function getMarketHistory(
     return true;
   }).slice(0, 3);
   for (const request of requests) {
-    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request);
+    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request, signal);
     if (result) return result;
   }
   return null;
@@ -183,6 +220,7 @@ async function getMarketHistoryAtInterval(
   episode: TradeEpisode,
   spanSeconds: number,
   request: CandleRequest,
+  signal?: AbortSignal,
 ): Promise<MarketHistory | null> {
   const before = episode.endTimestamp + request.interval * 2;
   const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.sourceInterval) + 4));
@@ -197,7 +235,7 @@ async function getMarketHistoryAtInterval(
   try {
     const response = await fetch(
       `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pairAddress)}/ohlcv/${request.timeframe}?${params}`,
-      { headers: { accept: "application/json;version=20230203" } },
+      { headers: { accept: "application/json;version=20230203" }, signal },
     );
     if (!response.ok) return null;
     const payload = (await response.json()) as OhlcvPayload;
@@ -217,8 +255,9 @@ async function getMarketHistoryAtInterval(
       ? sourceCandles
       : aggregateCandles(sourceCandles, request.interval);
     if (candles.length < 2) return null;
-    return { candles, points: buildMarkToMarketPoints(episode, candles), interval: request.interval };
-  } catch {
+    return { candles, points: buildMarkToMarketPoints(episode, candles), interval: request.interval, source: "gecko" };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     return null;
   }
 }
@@ -228,14 +267,17 @@ export async function createReplaySpec(
   context: ShareContext,
   walletAddress: string,
   candleInterval: CandleIntervalPreference = "auto",
+  signal?: AbortSignal,
 ): Promise<ReplaySpec> {
+  if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
   const fillPoints = buildReplayPoints(episode);
   const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
-    getUsdPerSol(),
-    getMarketHistory(context, episode, candleInterval),
-    getMarketCapMultiplier(context),
+    getUsdPerSol(signal),
+    getMarketHistory(context, episode, candleInterval, signal),
+    getMarketCapMultiplier(context, signal),
   ]);
+  if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
   return {
     id: crypto.randomUUID(),
     symbol: context.symbol || "TOKEN",
@@ -250,7 +292,7 @@ export async function createReplaySpec(
     currency: "SOL",
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,
-    marketDataSource: marketHistory ? "ohlcv" : "fills",
+    marketDataSource: marketHistory?.source ?? "fills",
     candleIntervalSeconds: marketHistory?.interval,
     tradeDataSource,
   };

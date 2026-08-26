@@ -1,4 +1,5 @@
 import type { Currency } from "./domain";
+import type { CandleIntervalPreference } from "./axiom-candles";
 import type { SoundName } from "./export-video";
 import type { ThemeName, WalletVisibility } from "./renderer";
 
@@ -16,7 +17,7 @@ export interface StudioSettings {
   chartMetric: "marketCap" | "price";
   marketCapFormat: "auto" | "thousands" | "millions";
   marketCapThreshold: number;
-  candleInterval: "auto" | "1s" | "5s" | "1m";
+  candleInterval: CandleIntervalPreference;
 }
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {

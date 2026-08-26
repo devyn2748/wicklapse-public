@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, createReplaySpec, selectCandleRequest } from "./replay-project";
+import { buildMarkToMarketPoints, createReplaySpec, LatestReplayRequest, selectCandleRequest } from "./replay-project";
 
 const fills: TradeFill[] = [
   {
@@ -74,8 +74,8 @@ describe("createReplaySpec", () => {
     expect(selectCandleRequest(120, "auto").interval).toBe(1);
     expect(selectCandleRequest(10 * 60, "auto").interval).toBe(5);
     expect(selectCandleRequest(30 * 60, "auto").interval).toBe(15);
-    expect(selectCandleRequest(120, "5s").interval).toBe(5);
-    expect(selectCandleRequest(120, "1m").interval).toBe(60);
+    expect(selectCandleRequest(300, "5s").interval).toBe(5);
+    expect(selectCandleRequest(3_600, "1m").interval).toBe(60);
   });
 
   it("safely coarsens an override that would truncate a long position", () => {
@@ -83,17 +83,23 @@ describe("createReplaySpec", () => {
   });
 
   it("builds requested five-second candles from supported one-second OHLCV", async () => {
-    const shortEpisode = { ...episode, endTimestamp: episode.startTimestamp + 9 };
+    const shortEpisode = { ...episode, endTimestamp: episode.startTimestamp + 200 };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("simple/price")) return new Response("{}", { status: 200 });
       if (!url.includes("/ohlcv/")) return new Response(JSON.stringify({ data: { attributes: {} } }), { status: 200 });
-      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
-        [episode.startTimestamp + 6, 4, 7, 3, 6, 2],
-        [episode.startTimestamp + 5, 3, 5, 2, 4, 1],
-        [episode.startTimestamp + 1, 1, 3, 0.5, 2, 4],
-        [episode.startTimestamp, 1, 2, 0.8, 1, 3],
-      ] } } }), { status: 200 });
+      return new Response(JSON.stringify({
+        data: {
+          attributes: {
+            ohlcv_list: [
+              [episode.startTimestamp + 6, 4, 7, 3, 6, 2],
+              [episode.startTimestamp + 5, 3, 5, 2, 4, 1],
+              [episode.startTimestamp + 1, 1, 3, 0.5, 2, 4],
+              [episode.startTimestamp, 1, 2, 0.8, 1, 3],
+            ]
+          }
+        }
+      }), { status: 200 });
     }));
     const replay = await createReplaySpec(shortEpisode, context, context.walletAddress ?? "", "5s");
     expect(replay.candleIntervalSeconds).toBe(5);
@@ -116,31 +122,46 @@ describe("createReplaySpec", () => {
       return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: rows } } }), { status: 200 });
     }));
     const replay = await createReplaySpec(episode, context, context.walletAddress ?? "", "1s");
-    expect(replay.marketDataSource).toBe("ohlcv");
+    expect(replay.marketDataSource).toBe("gecko");
     expect(replay.candleIntervalSeconds).toBe(15);
     expect(requestedUrls.some((url) => url.includes("aggregate=1"))).toBe(true);
     expect(requestedUrls.some((url) => url.includes("aggregate=15"))).toBe(true);
   });
 
   it("uses market candles when the captured pool returns enough history", async () => {
+    const hourEpisode = {
+      ...episode,
+      fills: [fills[0]!, { ...fills[1]!, timestamp: fills[0]!.timestamp + 3_600 }],
+      endTimestamp: fills[0]!.timestamp + 3_600,
+    };
     const requestedUrls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       requestedUrls.push(url);
       if (url.includes("simple/price")) return new Response(JSON.stringify({ solana: { usd: 180 } }), { status: 200 });
-      if (!url.includes("/ohlcv/")) return new Response(JSON.stringify({ data: { attributes: {
-        base_token_price_native_currency: "2",
-        market_cap_usd: "800000",
-      } } }), { status: 200 });
-      return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
-        [1_700_000_240, 2.4, 2.8, 2.3, 2.7, 10],
-        [1_700_000_180, 2.0, 2.5, 1.9, 2.4, 10],
-        [1_700_000_120, 1.5, 2.1, 1.4, 2.0, 10],
-        [1_700_000_060, 1.0, 1.6, 0.9, 1.5, 10],
-      ] } } }), { status: 200 });
+      if (!url.includes("/ohlcv/")) return new Response(JSON.stringify({
+        data: {
+          attributes: {
+            base_token_price_native_currency: "2",
+            market_cap_usd: "800000",
+          }
+        }
+      }), { status: 200 });
+      return new Response(JSON.stringify({
+        data: {
+          attributes: {
+            ohlcv_list: [
+              [1_700_000_240, 2.4, 2.8, 2.3, 2.7, 10],
+              [1_700_000_180, 2.0, 2.5, 1.9, 2.4, 10],
+              [1_700_000_120, 1.5, 2.1, 1.4, 2.0, 10],
+              [1_700_000_060, 1.0, 1.6, 0.9, 1.5, 10],
+            ]
+          }
+        }
+      }), { status: 200 });
     }));
 
-    const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY", "1m");
+    const spec = await createReplaySpec(hourEpisode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY", "1m");
     expect(spec.usdPerSol).toBe("180");
     expect(spec.candles).toHaveLength(4);
     expect(spec.candles?.[0]?.timestamp).toBe(1_700_000_060);
@@ -206,5 +227,80 @@ describe("createReplaySpec", () => {
     const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
     expect(spec.points).toHaveLength(2);
     expect(spec.points.map((point) => point.priceSol)).toEqual(["1", "3"]);
+  });
+});
+
+describe("Axiom candle waterfall and cancellation", () => {
+  const axiomEpisode: TradeEpisode = {
+    ...episode,
+    fills: episode.fills.map((fill) => ({ ...fill, source: "axiom" as const })),
+  };
+
+  it("uses pair-chart-v3 before GeckoTerminal for an Axiom-captured trade", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("pair-chart-v3")) return new Response(JSON.stringify({ bars: [
+        [(episode.startTimestamp - 1) * 1_000, 1, 1.2, 0.9, 1.1, 2],
+        [(episode.startTimestamp + 60) * 1_000, 1.1, 1.5, 1, 1.4, 3],
+        [(episode.startTimestamp + 120) * 1_000, 1.4, 2, 1.3, 1.9, 4],
+      ] }), { status: 200 });
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ data: { attributes: {} } }), { status: 200 });
+    }));
+
+    const spec = await createReplaySpec(axiomEpisode, context, "", "auto");
+    expect(spec.marketDataSource).toBe("axiom");
+    expect(spec.candles?.length).toBeGreaterThan(2);
+    expect(requestedUrls.some((url) => url.includes("api.geckoterminal.com") && url.includes("/ohlcv/"))).toBe(false);
+  });
+
+  it("falls back from Axiom to GeckoTerminal before using execution points", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("pair-chart-v3")) return new Response("unavailable", { status: 503 });
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      if (url.includes("/ohlcv/")) return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
+        [episode.startTimestamp + 240, 2, 3, 1.8, 2.8, 4],
+        [episode.startTimestamp + 120, 1, 2.2, 0.8, 2, 3],
+      ] } } }), { status: 200 });
+      return new Response(JSON.stringify({ data: { attributes: {} } }), { status: 200 });
+    }));
+
+    const spec = await createReplaySpec(axiomEpisode, context, "", "auto");
+    expect(spec.marketDataSource).toBe("gecko");
+    expect(requestedUrls.findIndex((url) => url.includes("pair-chart-v3")))
+      .toBeLessThan(requestedUrls.findIndex((url) => url.includes("/ohlcv/")));
+  });
+
+  it("uses the execution path only after both candle providers fail", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("simple/price")) return new Response("{}", { status: 200 });
+      return new Response("unavailable", { status: 503 });
+    }));
+    const spec = await createReplaySpec(axiomEpisode, context, "", "auto");
+    expect(spec.marketDataSource).toBe("fills");
+    expect(spec.candles).toBeUndefined();
+    expect(spec.points.map((point) => point.priceSol)).toEqual(["1", "3"]);
+  });
+
+  it("aborts in-flight replay fetches and rejects stale requests", async () => {
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    })));
+    const controller = new AbortController();
+    const pending = createReplaySpec(axiomEpisode, context, "", "auto", controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    const requests = new LatestReplayRequest();
+    const first = requests.begin();
+    const second = requests.begin();
+    expect(first.signal.aborted).toBe(true);
+    expect(requests.isLatest(first.id)).toBe(false);
+    expect(requests.isLatest(second.id)).toBe(true);
   });
 });

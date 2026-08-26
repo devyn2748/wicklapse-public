@@ -31,6 +31,7 @@ const spec = {
     closeSol: "0.000015",
     volume: "1",
   })),
+  candleIntervalSeconds: 1,
   episode: {
     startTimestamp: 100,
     endTimestamp: 200,

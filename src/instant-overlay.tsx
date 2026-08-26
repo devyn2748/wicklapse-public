@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { fetchAxiomExecutions } from "./axiom-api";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
+import { selectAllowedIntervals } from "./axiom-candles";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
-import { createReplaySpec, type CandleIntervalPreference } from "./replay-project";
+import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName } from "./renderer";
 import {
   loadStudioSettings,
@@ -148,12 +149,13 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
   const [replayContext, setReplayContext] = useState<ShareContext | null>(null);
   const [candleBusy, setCandleBusy] = useState(false);
-  const candleRequestRef = useRef(0);
+  const replayRequestRef = useRef(new LatestReplayRequest());
   const [status, setStatus] = useState("Preparing Wicklapse…");
   const [error, setError] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
 
   const buildCapturedReplay = useCallback(async (candleInterval: CandleIntervalPreference = "auto") => {
+    const request = replayRequestRef.current.begin();
     setError("");
     try {
       if (!context.pairAddress) throw new Error("Open Wicklapse from an Axiom /meme/{pairAddress} coin page.");
@@ -178,11 +180,13 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         throw new Error("No replayable buys or sells were found for the configured wallet(s) on this token.");
       }
       setStatus(`Building from ${episode.fills.length} Axiom execution${episode.fills.length === 1 ? "" : "s"}…`);
-      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval);
+      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal);
+      if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
       setView("instant");
     } catch (caught) {
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
       setError(caught instanceof Error ? caught.message : "The trade could not be resolved.");
       setView("error");
     }
@@ -208,6 +212,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
       });
     return () => {
       active = false;
+      replayRequestRef.current.cancel();
     };
   }, [buildCapturedReplay]);
 
@@ -222,22 +227,30 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const changeCandleInterval = async (value: CandleIntervalPreference) => {
     patch("candleInterval", value);
     if (!spec) return;
-    const requestId = ++candleRequestRef.current;
+    const request = replayRequestRef.current.begin();
     setCandleBusy(true);
     setError("");
     try {
       const sourceContext = replayContext ?? context;
-      const nextSpec = await createReplaySpec(spec.episode, sourceContext, spec.walletAddress, value);
-      if (requestId !== candleRequestRef.current) return;
+      const nextSpec = await createReplaySpec(spec.episode, sourceContext, spec.walletAddress, value, request.signal);
+      if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: sourceContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
     } catch (caught) {
-      if (requestId !== candleRequestRef.current) return;
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
       setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
     } finally {
-      if (requestId === candleRequestRef.current) setCandleBusy(false);
+      if (replayRequestRef.current.isLatest(request.id)) setCandleBusy(false);
     }
   };
+
+  const allowedCandleIntervals = useMemo(
+    () => spec ? selectAllowedIntervals(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp)) : [],
+    [spec],
+  );
+  const displayedCandleInterval = allowedCandleIntervals.some((value) => value === settings.candleInterval)
+    ? settings.candleInterval
+    : "auto";
 
   const exportVideo = async () => {
     if (!spec) return;
@@ -299,7 +312,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>16:9 X POST · 1920 × 1080</b></div><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Candles</h3><span>{candleBusy ? "Refreshing…" : spec.candleIntervalSeconds ? `Using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : `${spec.candleIntervalSeconds / 60}m`}` : "Execution path"}</span></div><Segmented value={settings.candleInterval} options={[{ value: "auto", label: "Auto" }, { value: "1s", label: "1s" }, { value: "5s", label: "5s" }, { value: "1m", label: "1m" }]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
+            <div className="wick-control-section"><div className="wick-section-title"><h3>Candles</h3><span>{candleBusy ? "Refreshing…" : spec.candleIntervalSeconds ? `Using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : "Execution path"}</span></div><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Visual theme</h3><span>Wicklapse</span></div><div className="wick-themes">{(["obsidian", "neon", "minimal"] as ThemeName[]).map((theme) => <button type="button" className={settings.theme === theme ? "is-selected" : ""} key={theme} onClick={() => patch("theme", theme)}><i className={theme} />{theme}</button>)}</div></div>
             <div className="wick-control-grid">
               <div className="wick-control-section"><h3>Currency</h3><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></div>
