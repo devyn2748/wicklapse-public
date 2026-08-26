@@ -1,7 +1,65 @@
 import type { ReplaySpec, TradeFill } from "./domain";
 import { drawReplayFrame, replayEventVisualProgress, type RenderConfig } from "./renderer";
 
-export type SoundName = "pulse" | "chime" | "click" | "confirm" | "cash" | "snap" | "custom" | "off";
+export const BUNDLED_SOUND_PRESETS = [
+  { value: "hitmarker", label: "Hitmarker", file: "hitmarker.mp3" },
+  { value: "anime-ahh", label: "Anime Ahh", file: "anime-ahh.mp3" },
+  { value: "apple-pay", label: "Apple Pay", file: "apple-pay.mp3" },
+  { value: "cash-register", label: "Cash Register", file: "cash-register.mp3" },
+  { value: "ding", label: "Ding", file: "ding.mp3" },
+  { value: "discord", label: "Discord Notification", file: "discord.mp3" },
+  { value: "gta-pickup", label: "GTA Pickup", file: "gta-pickup.mp3" },
+  { value: "mario-coin", label: "Mario Coin", file: "mario-coin.mp3" },
+  { value: "mario-jump", label: "Mario Jump", file: "mario-jump.mp3" },
+  { value: "pluh", label: "Pluh", file: "pluh.mp3" },
+  { value: "pop", label: "Pop", file: "pop.mp3" },
+  { value: "gaming-punch", label: "Gaming Punch", file: "gaming-punch.mp3" },
+  { value: "shocked", label: "Shocked", file: "shocked.mp3" },
+] as const;
+
+export type BundledSoundName = (typeof BUNDLED_SOUND_PRESETS)[number]["value"];
+export type SoundName = "pulse" | "chime" | "click" | "confirm" | "cash" | "snap" | BundledSoundName | "custom" | "off";
+
+const soundFiles = new Map<string, string>(BUNDLED_SOUND_PRESETS.map((preset) => [preset.value, preset.file]));
+const soundData = new Map<string, Promise<ArrayBuffer>>();
+const decodedSounds = new WeakMap<AudioContext, Map<string, Promise<AudioBuffer>>>();
+
+function isBundledSound(sound: SoundName): sound is BundledSoundName {
+  return soundFiles.has(sound);
+}
+
+function soundUrl(sound: BundledSoundName): string {
+  const path = `sounds/${soundFiles.get(sound)}`;
+  return typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL(path) : `/${path}`;
+}
+
+export async function prepareReplaySound(
+  audio: AudioContext,
+  sound: SoundName,
+  customBuffer?: AudioBuffer | null,
+): Promise<AudioBuffer | null> {
+  if (sound === "custom") return customBuffer ?? null;
+  if (!isBundledSound(sound)) return null;
+  let contextCache = decodedSounds.get(audio);
+  if (!contextCache) {
+    contextCache = new Map();
+    decodedSounds.set(audio, contextCache);
+  }
+  const cached = contextCache.get(sound);
+  if (cached) return cached;
+  const fileUrl = soundUrl(sound);
+  let dataPromise = soundData.get(fileUrl);
+  if (!dataPromise) {
+    dataPromise = fetch(fileUrl).then((response) => {
+      if (!response.ok) throw new Error(`Bundled sound could not be loaded (${response.status}).`);
+      return response.arrayBuffer();
+    });
+    soundData.set(fileUrl, dataPromise);
+  }
+  const decoded = dataPromise.then((data) => audio.decodeAudioData(data.slice(0)));
+  contextCache.set(sound, decoded);
+  return decoded;
+}
 
 export interface ExportAudioOptions {
   buySound: SoundName;
@@ -22,7 +80,7 @@ function scheduleTone(
   volume: number,
   side: TradeFill["side"],
 ): void {
-  if (sound === "off" || sound === "custom") return;
+  if (sound === "off" || sound === "custom" || isBundledSound(sound)) return;
   const oscillator = audio.createOscillator();
   const gain = audio.createGain();
   const base = side === "buy" ? 620 : 330;
@@ -62,21 +120,22 @@ function scheduleReplaySound(
   volume: number,
   side: TradeFill["side"],
 ): void {
-  if (sound === "custom") {
+  if (sound === "custom" || isBundledSound(sound)) {
     if (customBuffer) scheduleBuffer(audio, destination, when, customBuffer, volume);
     return;
   }
   scheduleTone(audio, destination, when, sound, volume, side);
 }
 
-export function playReplaySound(
+export async function playReplaySound(
   audio: AudioContext,
   sound: SoundName,
   side: TradeFill["side"],
   customBuffer?: AudioBuffer | null,
   volume = 0.8,
-): void {
-  scheduleReplaySound(audio, audio.destination, audio.currentTime + 0.015, sound, customBuffer, volume, side);
+): Promise<void> {
+  const buffer = await prepareReplaySound(audio, sound, customBuffer);
+  scheduleReplaySound(audio, audio.destination, audio.currentTime + 0.015, sound, buffer, volume, side);
 }
 
 export function replayEventOffset(
@@ -138,12 +197,16 @@ export async function exportReplayVideo(
     recorder.addEventListener("error", () => reject(new Error("The browser could not encode this video.")), { once: true });
   });
 
+  const [buyPreparedBuffer, sellPreparedBuffer] = await Promise.all([
+    prepareReplaySound(audio, audioOptions.buySound, audioOptions.buyCustomBuffer),
+    prepareReplaySound(audio, audioOptions.sellSound, audioOptions.sellCustomBuffer),
+  ]);
   drawReplayFrame(context, spec, config, 0);
   recorder.start(250);
   const leadIn = 0.03;
   const now = audio.currentTime + leadIn;
   for (const fill of replaySoundEvents(spec)) {
-    const customBuffer = fill.side === "buy" ? audioOptions.buyCustomBuffer : audioOptions.sellCustomBuffer;
+    const customBuffer = fill.side === "buy" ? buyPreparedBuffer : sellPreparedBuffer;
     scheduleReplaySound(
       audio,
       destination,

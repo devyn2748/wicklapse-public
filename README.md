@@ -47,6 +47,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
 - Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
 - Advanced custom Buy/Sell sound uploads (up to 8 MB each) with partial fills consolidated to the same audible event as their visible marker
+- Thirteen bundled Buy/Sell presets—including Hitmarker, Apple Pay, Cash Register, GTA Pickup, Mario Coin, Pop, and Gaming Punch—available by default in both dropdowns
 - Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
 - SOL/USD presentation
 - Local canvas preview and video export

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReplaySpec, TradeFill } from "./domain";
-import { replayEventOffset, replaySoundEvents } from "./export-video";
+import { BUNDLED_SOUND_PRESETS, replayEventOffset, replaySoundEvents } from "./export-video";
 
 const fill = (signature: string, timestamp: number, side: "buy" | "sell"): TradeFill => ({
   signature,
@@ -39,6 +39,12 @@ const spec = {
 } as ReplaySpec;
 
 describe("replay audio timing", () => {
+  it("exposes the complete bundled sound pack with unique stable identifiers", () => {
+    expect(BUNDLED_SOUND_PRESETS).toHaveLength(13);
+    expect(new Set(BUNDLED_SOUND_PRESETS.map((preset) => preset.value)).size).toBe(13);
+    expect(new Set(BUNDLED_SOUND_PRESETS.map((preset) => preset.file)).size).toBe(13);
+  });
+
   it("uses the same eased landscape timeline as the visible execution marker", () => {
     const config = { duration: 8, width: 1920, height: 1080 };
     expect(replayEventOffset(buy, spec, config)).toBeGreaterThan(0.1);

@@ -22,7 +22,7 @@ import {
 import { normalizeWalletAddresses } from "../../src/axiom-api";
 import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { buildReplayPoints, buildTradeEpisodes, solFromLamports } from "../../src/episodes";
-import { exportReplayVideo, playReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
+import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec } from "../../src/replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
@@ -195,7 +195,7 @@ function PreviewCanvas({
       soundedEventsRef.current.add(fill.signature);
       const sound = fill.side === "buy" ? settings.buySound : settings.sellSound;
       const customBuffer = fill.side === "buy" ? buyCustomBuffer : sellCustomBuffer;
-      playReplaySound(audio, sound, fill.side, customBuffer);
+      void playReplaySound(audio, sound, fill.side, customBuffer);
     }
   }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.duration, settings.height, settings.sellSound, settings.width, spec]);
 
@@ -263,7 +263,10 @@ function PreviewCanvas({
               setPlaying(false);
               return;
             }
-            void ensureAudio().then(() => {
+            void ensureAudio().then((audio) => Promise.all([
+              prepareReplaySound(audio, settings.buySound, buyCustomBuffer),
+              prepareReplaySound(audio, settings.sellSound, sellCustomBuffer),
+            ])).then(() => {
               if (progress >= 1) {
                 previousProgressRef.current = 0;
                 soundedEventsRef.current.clear();
@@ -824,7 +827,7 @@ export function StudioApp(): JSX.Element {
 
             <section className="inspector-card" id="advanced-audio">
               <h3>♫ Event audio</h3>
-              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option>{buyCustomBuffer && <option value="custom">Custom · {buyCustomName}</option>}<option value="off">Off</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option>{sellCustomBuffer && <option value="custom">Custom · {sellCustomName}</option>}<option value="off">Off</option></select></label></div>
+              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{buyCustomBuffer && <option value="custom">Custom · {buyCustomName}</option>}<option value="off">Off</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{sellCustomBuffer && <option value="custom">Custom · {sellCustomName}</option>}<option value="off">Off</option></select></label></div>
               <div className="media-upload-grid"><label>{buyCustomName ? `Replace ${buyCustomName}` : "Upload buy sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("buy", event)} /></label><label>{sellCustomName ? `Replace ${sellCustomName}` : "Upload sell sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("sell", event)} /></label></div>
               <small className="local-asset-note">Custom event sounds stay on this device and are used for the current studio session. The first five seconds of each file are available for playback.</small>
             </section>
