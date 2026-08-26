@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { browser } from "wxt/browser";
 import {
   useCallback,
   useEffect,
@@ -10,6 +11,7 @@ import {
 } from "react";
 import {
   RpcSettingsSchema,
+  ShareContextSchema,
   type Currency,
   type ReplaySpec,
   type RpcSettings,
@@ -17,6 +19,8 @@ import {
   type TradeEpisode,
   type TradeFill,
 } from "../../src/domain";
+import { normalizeWalletAddresses } from "../../src/axiom-api";
+import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { buildReplayPoints, buildTradeEpisodes, solFromLamports } from "../../src/episodes";
 import { exportReplayVideo, type SoundName } from "../../src/export-video";
 import { createReplaySpec } from "../../src/replay-project";
@@ -27,8 +31,10 @@ import {
   loadRpcSettings,
   loadShareContext,
   loadStudioSettings,
+  loadTradingWalletAddresses,
   saveRpcSettings,
   saveStudioSettings,
+  saveTradingWalletAddresses,
 } from "../../src/storage";
 import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "../../src/studio-settings";
 
@@ -304,6 +310,7 @@ export function StudioApp(): JSX.Element {
     remember: false,
   });
   const [mint, setMint] = useState("");
+  const [walletInput, setWalletInput] = useState("");
   const [episodes, setEpisodes] = useState<TradeEpisode[]>([]);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null);
   const [spec, setSpec] = useState<ReplaySpec | null>(null);
@@ -317,8 +324,9 @@ export function StudioApp(): JSX.Element {
   const [musicStart, setMusicStart] = useState(0);
 
   useEffect(() => {
-    void Promise.all([loadShareContext(), loadRpcSettings(), loadProject(), loadStudioSettings()]).then(([share, savedRpc, project, savedSettings]) => {
+    void Promise.all([loadShareContext(), loadRpcSettings(), loadProject(), loadStudioSettings(), loadTradingWalletAddresses()]).then(([share, savedRpc, project, savedSettings, savedWallets]) => {
       setSettings(savedSettings);
+      setWalletInput(savedWallets.join(", "));
       if (share) {
         setContext(share);
         setMint(share.tokenMint ?? "");
@@ -344,6 +352,60 @@ export function StudioApp(): JSX.Element {
   };
 
   const findTrade = async () => {
+    setError("");
+    const walletAddresses = normalizeWalletAddresses([walletInput]);
+    if (!walletAddresses.length) {
+      setError("Add at least one public Axiom trading wallet.");
+      return;
+    }
+    await saveTradingWalletAddresses(walletAddresses);
+    let resolvedContext = context;
+    const cachedWallets = new Set(context?.walletAddresses ?? []);
+    const needsRefresh = !context?.tradeExecutions?.length || walletAddresses.some((wallet) => !cachedWallets.has(wallet));
+    if (needsRefresh) {
+      setBusy(true);
+      setProgressMessage("Retrieving exact executions from Axiom…");
+      try {
+        const response = await browser.runtime.sendMessage({
+          type: "WICKLAPSE_REFRESH_AXIOM_TRADE",
+          pairAddress: context?.pairAddress ?? null,
+        }) as { ok?: boolean; context?: unknown; error?: string };
+        if (!response?.ok) throw new Error(response?.error ?? "Axiom trade lookup failed.");
+        const parsedContext = ShareContextSchema.safeParse(response.context);
+        if (!parsedContext.success) throw new Error("Axiom returned trade data in an unsupported format.");
+        resolvedContext = parsedContext.data;
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Axiom trade lookup failed.");
+        return;
+      } finally {
+        setBusy(false);
+        setProgressMessage("");
+      }
+    }
+    if (!resolvedContext?.tradeExecutions?.length) {
+      setError("No trades found for the configured wallet(s) on this token.");
+      return;
+    }
+    const matchingExecutions = resolvedContext.tradeExecutions.filter((execution) => walletAddresses.includes(execution.wallet));
+    const sourceContext: ShareContext = {
+      ...resolvedContext,
+      tradeExecutions: matchingExecutions,
+      walletAddresses,
+      walletAddress: walletAddresses[0] ?? null,
+      walletLabel: walletAddresses.length > 1 ? `${walletAddresses.length} wallets` : null,
+    };
+    const candidates = buildAxiomExecutionEpisodes(sourceContext);
+    if (!candidates.length) {
+      setError("No trades found for the configured wallet(s) on this token.");
+      return;
+    }
+    setContext(sourceContext);
+    setEpisodes(candidates);
+    setSelectedEpisodeId(candidates[0]!.id);
+    setStage("confirm");
+  };
+
+  const findTradeWithRpc = async () => {
     setError("");
     const parsed = RpcSettingsSchema.safeParse(rpc);
     if (!parsed.success) {
@@ -399,7 +461,7 @@ export function StudioApp(): JSX.Element {
       pairAddress: null, symbol: "TOKEN", tokenName: null, walletAddress: null, walletLabel: null, boughtSol: null,
       soldSol: null, holdingSol: null, pnlSol: null, roiPercent: null, positionStatus: "unknown" as const, sourceText: "",
     };
-    const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, rpc.walletAddress);
+    const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, sourceContext.walletAddress ?? rpc.walletAddress);
     setSpec(nextSpec);
     setStage("studio");
   };
@@ -495,9 +557,7 @@ export function StudioApp(): JSX.Element {
           <section className="hero-copy">
             <div className="eyebrow">AXIOM → WICKLAPSE</div>
             <h1>Turn the selected trade into motion.</h1>
-            <p>
-              Open Wicklapse from Axiom’s Share dialog, then provide the public wallet and RPC access used to resolve the finalized trade.
-            </p>
+            <p>Open Wicklapse from Axiom’s Share dialog. Wicklapse retrieves the selected token’s exact executions automatically for your saved public trading wallets.</p>
             <div className="capture-summary">
               <span className={context ? "ready-dot" : "idle-dot"} />
               <div>
@@ -509,18 +569,27 @@ export function StudioApp(): JSX.Element {
 
           <section className="connect-card">
             <div className="card-head">
-              <div><span>Manual test connection</span><h2>Resolve the trade</h2></div>
+              <div><span>Automatic Axiom lookup</span><h2>Generate replay</h2></div>
               <span className="private-badge">Stored locally</span>
             </div>
             <label>
-              Public wallet address
-              <input value={rpc.walletAddress} onChange={(event) => setRpc({ ...rpc, walletAddress: event.target.value.trim() })} placeholder="Solana wallet address" />
-              <small>Use the active Axiom trading wallet, not a funding or withdrawal wallet.</small>
+              Public trading wallets
+              <input value={walletInput} onChange={(event) => setWalletInput(event.target.value)} placeholder="Wallet 1, Wallet 2, …" />
+              <small>Comma-separate multiple Axiom trading wallets. They are stored only in this Chrome profile.</small>
             </label>
             <label>
               Token mint
               <input value={mint} onChange={(event) => setMint(event.target.value.trim())} placeholder="Captured from Axiom Share" />
             </label>
+            <button className="primary-button" type="button" disabled={busy} onClick={() => void findTrade()}>
+              Generate Replay
+            </button>
+            <details>
+              <summary>RPC fallback</summary>
+              <label>
+                RPC wallet address
+                <input value={rpc.walletAddress} onChange={(event) => setRpc({ ...rpc, walletAddress: event.target.value.trim() })} placeholder="Single Solana wallet address" />
+              </label>
             <div className="field-group">
               <span>RPC provider</span>
               <Segmented
@@ -544,11 +613,12 @@ export function StudioApp(): JSX.Element {
               <input type="checkbox" checked={rpc.remember} onChange={(event) => setRpc({ ...rpc, remember: event.target.checked })} />
               Remember on this browser
             </label>
+            <button className="secondary-button" type="button" disabled={busy} onClick={() => void findTradeWithRpc()}>
+              {busy ? "Resolving with RPC…" : "Find using RPC fallback"}
+            </button>
+            </details>
             {progressMessage && <div className="progress-note"><span className="spinner" />{progressMessage}</div>}
             {error && <div className="error-box">{error}</div>}
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void findTrade()}>
-              {busy ? "Resolving trade…" : "Find matching trade"}
-            </button>
             <button className="text-button" type="button" onClick={showDemo}>Preview with demo trade</button>
           </section>
         </main>

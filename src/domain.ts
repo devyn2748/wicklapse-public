@@ -3,6 +3,26 @@ import { z } from "zod";
 export const CurrencySchema = z.enum(["SOL", "USD"]);
 export type Currency = z.infer<typeof CurrencySchema>;
 
+export const SolanaAddressSchema = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+const DecimalStringSchema = z.string().regex(/^\d+(?:\.\d+)?$/);
+
+/** Provider-neutral execution data consumed by the replay pipeline. */
+export const TradeExecutionSchema = z.object({
+  side: z.enum(["buy", "sell"]),
+  timestamp: z.number().int().positive(),
+  tokenAmount: DecimalStringSchema,
+  priceSol: DecimalStringSchema,
+  priceUsd: DecimalStringSchema,
+  totalSol: DecimalStringSchema,
+  totalUsd: DecimalStringSchema,
+  wallet: SolanaAddressSchema,
+  signature: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{64,96}$/),
+  pairAddress: SolanaAddressSchema,
+  source: z.literal("axiom"),
+});
+
+export type TradeExecution = z.infer<typeof TradeExecutionSchema>;
+
 export const AxiomTradeEventSchema = z.object({
   id: z.string().min(1).max(160),
   side: z.enum(["buy", "sell"]),
@@ -26,7 +46,9 @@ export const ShareContextSchema = z.object({
   symbol: z.string().min(1).max(32),
   tokenName: z.string().max(120).nullable(),
   tokenImageUrl: z.string().url().nullable().optional(),
+  tradeExecutions: z.array(TradeExecutionSchema).max(5_000).optional(),
   tradeEvents: z.array(AxiomTradeEventSchema).max(250).optional(),
+  walletAddresses: z.array(SolanaAddressSchema).max(25).optional(),
   walletAddress: z.string().nullable(),
   walletLabel: z.string().max(80).nullable(),
   boughtSol: z.string().nullable(),
@@ -78,6 +100,10 @@ export interface TradeFill {
   networkFeeLamports: string;
   walletPostTokenRaw: string;
   estimatedPriceSol: string;
+  executionPriceUsd?: string;
+  totalUsd?: string;
+  wallet?: string;
+  pairAddress?: string;
   source?: "rpc" | "axiom";
 }
 
@@ -109,6 +135,7 @@ export interface ReplaySpec {
   symbol: string;
   tokenMint: string;
   walletAddress: string;
+  walletAddresses?: string[];
   capturedAt: number;
   episode: TradeEpisode;
   points: ReplayPoint[];

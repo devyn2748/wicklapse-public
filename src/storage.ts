@@ -7,12 +7,14 @@ import {
   type StudioProject,
 } from "./domain";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
+import { normalizeWalletAddresses } from "./axiom-api";
 
 const KEYS = {
   latestShareContext: "wicklapse.latestShareContext",
   rpcSettings: "wicklapse.rpcSettings",
   project: "wicklapse.project",
   studioSettings: "wicklapse.studioSettings",
+  tradingWallets: "wicklapse.tradingWallets",
 } as const;
 
 export async function saveShareContext(context: ShareContext): Promise<void> {
@@ -62,6 +64,21 @@ export async function clearRpcSettings(): Promise<void> {
   } catch {
     // A content-script caller can still clear the persisted value without session access.
   }
+}
+
+export async function saveTradingWalletAddresses(walletAddresses: string[]): Promise<void> {
+  await browser.storage.local.set({ [KEYS.tradingWallets]: normalizeWalletAddresses(walletAddresses) });
+}
+
+export async function loadTradingWalletAddresses(): Promise<string[]> {
+  const stored = await browser.storage.local.get(KEYS.tradingWallets);
+  const rawWallets: unknown = stored[KEYS.tradingWallets];
+  const configured = Array.isArray(rawWallets)
+    ? normalizeWalletAddresses(rawWallets.filter((value: unknown): value is string => typeof value === "string"))
+    : [];
+  if (configured.length) return configured;
+  const legacyRpc = await loadRpcSettings();
+  return legacyRpc ? normalizeWalletAddresses([legacyRpc.walletAddress]) : [];
 }
 
 export async function saveProject(project: StudioProject): Promise<void> {

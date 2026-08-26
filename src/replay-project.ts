@@ -87,6 +87,7 @@ export async function createReplaySpec(
     symbol: context.symbol || "TOKEN",
     tokenMint: episode.tokenMint,
     walletAddress,
+    walletAddresses: context.walletAddresses,
     capturedAt: context.capturedAt,
     episode,
     points: marketPoints ?? fillPoints,

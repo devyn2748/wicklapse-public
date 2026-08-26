@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import type { AxiomTradeEvent, ShareContext, TradeEpisode, TradeFill } from "./domain";
+import type { ShareContext, TradeEpisode, TradeExecution, TradeFill } from "./domain";
 import { buildTradeEpisodes } from "./episodes";
 
 const SUBSCRIPT_DIGITS: Record<string, string> = {
@@ -54,45 +54,39 @@ export function ageToSeconds(age: string | null): number | null {
   return Math.round(Number(match[1]) * unitSeconds[match[2]]!);
 }
 
-function eventTimestamp(event: AxiomTradeEvent, context: ShareContext): number {
-  if (event.timestamp) return event.timestamp;
-  const age = ageToSeconds(event.displayAge);
-  return Math.floor(context.capturedAt / 1_000) - (age ?? event.rowIndex * 60);
-}
-
-export function buildAxiomCaptureEpisodes(context: ShareContext): TradeEpisode[] {
+export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode[] {
   const tokenMint = context.tokenMint ?? context.pairAddress;
-  if (!tokenMint || !context.tradeEvents?.length) return [];
+  if (!tokenMint || !context.tradeExecutions?.length) return [];
 
-  const chronological = [...context.tradeEvents]
-    .sort((left, right) => {
-      const timeDifference = eventTimestamp(left, context) - eventTimestamp(right, context);
-      return timeDifference || right.rowIndex - left.rowIndex;
-    });
+  const chronological = [...context.tradeExecutions]
+    .sort((left, right) => left.timestamp - right.timestamp || left.signature.localeCompare(right.signature));
   let lastTimestamp = 0;
   let tokenPosition = new Decimal(0);
-  const fills: TradeFill[] = chronological.map((event, index) => {
-    const tokenAmount = new Decimal(event.tokenAmount ?? "0");
-    const quoteSol = new Decimal(event.quoteSol);
-    tokenPosition = event.side === "buy" ? tokenPosition.plus(tokenAmount) : tokenPosition.minus(tokenAmount);
+  const fills: TradeFill[] = chronological.map((execution: TradeExecution) => {
+    const tokenAmount = new Decimal(execution.tokenAmount);
+    const quoteSol = new Decimal(execution.totalSol);
+    tokenPosition = execution.side === "buy" ? tokenPosition.plus(tokenAmount) : tokenPosition.minus(tokenAmount);
     if (tokenPosition.isNegative()) tokenPosition = new Decimal(0);
     const rawPosition = tokenPosition.mul(TOKEN_SCALE).toDecimalPlaces(0).toFixed(0);
     const rawAmount = tokenAmount.mul(TOKEN_SCALE).toDecimalPlaces(0).toFixed(0);
-    const approximate = eventTimestamp(event, context);
-    const timestamp = Math.max(approximate, lastTimestamp + 1);
+    const timestamp = Math.max(execution.timestamp, lastTimestamp + 1);
     lastTimestamp = timestamp;
     return {
-      signature: event.signature ?? `axiom-capture-${context.id}-${index}`,
+      signature: execution.signature,
       slot: 0,
       timestamp,
-      side: event.side,
+      side: execution.side,
       tokenMint,
       tokenDecimals: TOKEN_DECIMALS,
       tokenAmountRaw: rawAmount,
       quoteLamports: quoteSol.mul(LAMPORTS).toDecimalPlaces(0).toFixed(0),
       networkFeeLamports: "0",
       walletPostTokenRaw: rawPosition,
-      estimatedPriceSol: tokenAmount.isZero() ? "0" : quoteSol.div(tokenAmount).toString(),
+      estimatedPriceSol: execution.priceSol,
+      executionPriceUsd: execution.priceUsd,
+      totalUsd: execution.totalUsd,
+      wallet: execution.wallet,
+      pairAddress: execution.pairAddress,
       source: "axiom",
     };
   });
@@ -103,3 +97,6 @@ export function buildAxiomCaptureEpisodes(context: ShareContext): TradeEpisode[]
     matchLabel: "Axiom capture",
   }));
 }
+
+/** @deprecated Kept for stored projects and callers from the 0.3 test build. */
+export const buildAxiomCaptureEpisodes = buildAxiomExecutionEpisodes;

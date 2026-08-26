@@ -9,6 +9,7 @@ export default defineConfig({
     host_permissions: [
       "https://axiom.trade/*",
       "https://*.axiom.trade/*",
+      "https://api3.axiom.trade/*",
       "https://api.mainnet-beta.solana.com/*",
       "https://*.helius-rpc.com/*",
       "https://api.coingecko.com/*",

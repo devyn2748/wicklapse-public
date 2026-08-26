@@ -1,11 +1,11 @@
 import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { normalizeAxiomNumber } from "../../src/axiom-capture";
-import { AxiomTradeEventSchema, ShareContextSchema, type AxiomTradeEvent, type ShareContext } from "../../src/domain";
+import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
+import { ShareContextSchema, type ShareContext } from "../../src/domain";
 import { InstantOverlay } from "../../src/instant-overlay";
 import overlayStyles from "../../src/instant-overlay.css?inline";
-import { saveShareContext } from "../../src/storage";
+import { loadTradingWalletAddresses, saveShareContext } from "../../src/storage";
 
 const BASE58_PATTERN = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g;
 
@@ -47,8 +47,7 @@ function base58From(value: string): string | null {
 }
 
 function findPairAddress(): string | null {
-  const pathMatch = location.pathname.match(/\/meme\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:\/|$)/i);
-  return pathMatch?.[1] ?? null;
+  return pairAddressFromAxiomUrl(location.href);
 }
 
 function findMint(): string | null {
@@ -131,152 +130,12 @@ function findTradeSummary(): HTMLElement | null {
   );
 }
 
-function normalizedText(element: Element): string {
-  return (element.textContent ?? "").replace(/\s+/g, " ").trim();
-}
-
-function findPersonalMarker(): HTMLElement | null {
-  return Array.from(document.querySelectorAll<HTMLElement>("div, span, p"))
-    .filter(isRendered)
-    .find((element) => /^Showing \d+ of your transactions$/i.test(normalizedText(element))) ?? null;
-}
-
-function findTradeTableRoot(marker: HTMLElement | null): HTMLElement | null {
-  if (marker) {
-    let candidate: HTMLElement | null = marker.parentElement;
-    for (let depth = 0; candidate && depth < 8; depth += 1, candidate = candidate.parentElement) {
-      const text = normalizedText(candidate);
-      if (/\bAmount\b/i.test(text) && /\bTotal\s*SOL\b/i.test(text) && candidate.querySelector('a[href*="solscan.io/tx/"]')) {
-        return candidate;
-      }
-    }
-  }
-  return Array.from(document.querySelectorAll<HTMLElement>("div, section"))
-    .filter(isRendered)
-    .filter((element) => {
-      const text = normalizedText(element);
-      return /\bAge\b/i.test(text) && /\bType\b/i.test(text) && /\bAmount\b/i.test(text) && /\bTotal\s*SOL\b/i.test(text) && Boolean(element.querySelector('a[href*="solscan.io/tx/"]'));
-    })
-    .sort((left, right) => left.clientWidth * left.clientHeight - right.clientWidth * right.clientHeight)[0] ?? null;
-}
-
-function findColumnHeader(root: HTMLElement, pattern: RegExp): HTMLElement | null {
-  return Array.from(root.querySelectorAll<HTMLElement>("button, div, span"))
-    .filter(isRendered)
-    .filter((element) => pattern.test(normalizedText(element)))
-    .sort((left, right) => {
-      const leftRect = left.getBoundingClientRect();
-      const rightRect = right.getBoundingClientRect();
-      return leftRect.width * leftRect.height - rightRect.width * rightRect.height;
-    })[0] ?? null;
-}
-
-function valueAtColumn(row: HTMLElement, header: HTMLElement | null): string | null {
-  if (!header) return null;
-  const x = header.getBoundingClientRect().left + header.getBoundingClientRect().width / 2;
-  return Array.from(row.querySelectorAll<HTMLElement>("div, span, button, a"))
-    .filter(isRendered)
-    .map((element) => ({ element, text: normalizedText(element), rect: element.getBoundingClientRect(), value: normalizeAxiomNumber(normalizedText(element)) }))
-    .filter(({ rect, value }) => value !== null && rect.left <= x + 3 && rect.right >= x - 3)
-    .sort((left, right) => {
-      const leftPenalty = (left.rect.width < 20 ? 2_000 : 0) + (left.text.length < 2 ? 1_000 : 0);
-      const rightPenalty = (right.rect.width < 20 ? 2_000 : 0) + (right.text.length < 2 ? 1_000 : 0);
-      return leftPenalty - rightPenalty || left.rect.width * left.rect.height - right.rect.width * right.rect.height;
-    })[0]?.value ?? null;
-}
-
-function rowForTransactionLink(link: HTMLAnchorElement, root: HTMLElement): HTMLElement | null {
-  let candidate: HTMLElement | null = link.parentElement;
-  for (let depth = 0; candidate && candidate !== root && depth < 8; depth += 1, candidate = candidate.parentElement) {
-    const text = normalizedText(candidate);
-    const rect = candidate.getBoundingClientRect();
-    if (/\b(Buy|Sell)\b/i.test(text) && rect.height > 12 && rect.height < 140) return candidate;
-  }
-  return null;
-}
-
-function transactionSignature(link: HTMLAnchorElement): string | null {
-  const match = link.href.match(/solscan\.io\/tx\/([1-9A-HJ-NP-Za-km-z]{64,96})/i);
-  return match?.[1] ?? null;
-}
-
-function captureAxiomTrades(): AxiomTradeEvent[] {
-  const marker = findPersonalMarker();
-  const root = findTradeTableRoot(marker);
-  if (!root) return [];
-  const headers = {
-    amount: findColumnHeader(root, /^Amount$/i),
-    marketCap: findColumnHeader(root, /^MC(?:\s|$)/i),
-    totalSol: findColumnHeader(root, /^Total\s*SOL(?:\s|$)/i),
-  };
-  const events: AxiomTradeEvent[] = [];
-  const seen = new Set<string>();
-  const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="solscan.io/tx/"]'));
-  for (const link of links) {
-    const signature = transactionSignature(link);
-    if (!signature || seen.has(signature)) continue;
-    const row = rowForTransactionLink(link, root);
-    if (!row) continue;
-    const text = normalizedText(row);
-    if (!marker && !/\bYOU\b/i.test(text)) continue;
-    const sideMatch = text.match(/\b(Buy|Sell)\b/i);
-    const quoteSol = valueAtColumn(row, headers.totalSol);
-    if (!sideMatch || !quoteSol) continue;
-    const displayAge = normalizedText(link).match(/\b\d+(?:\.\d+)?\s*(?:s|m|h|d|w|mo|y)\b/i)?.[0] ?? null;
-    const parsed = AxiomTradeEventSchema.safeParse({
-      id: signature,
-      side: sideMatch[1]!.toLowerCase(),
-      tokenAmount: valueAtColumn(row, headers.amount),
-      quoteSol,
-      marketCapUsd: valueAtColumn(row, headers.marketCap),
-      timestamp: null,
-      displayAge,
-      signature,
-      rowIndex: events.length,
-    });
-    if (!parsed.success) continue;
-    seen.add(signature);
-    events.push(parsed.data);
-  }
-  return events;
-}
-
-async function activatePersonalTrades(): Promise<void> {
-  if (findPersonalMarker()) return;
-  if (!findTradeTableRoot(null)) {
-    const tradesButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .filter(isRendered)
-      .find((button) => normalizedText(button).toUpperCase() === "TRADES");
-    tradesButton?.click();
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-  }
-  const youButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-    .filter(isRendered)
-    .find((button) => normalizedText(button).replace(/[^A-Z]/gi, "").toUpperCase() === "YOU");
-  if (!youButton) return;
-  youButton.click();
-  await new Promise<void>((resolve) => {
-    const timeout = window.setTimeout(() => {
-      observer.disconnect();
-      resolve();
-    }, 2_000);
-    const observer = new MutationObserver(() => {
-      if (!findPersonalMarker()) return;
-      window.clearTimeout(timeout);
-      observer.disconnect();
-      resolve();
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-  });
-}
-
 function buildShareContext(): ShareContext {
   const summary = findTradeSummary();
   const summaryText = summary?.innerText.trim() ?? "";
   const summaryUsesSol = Boolean(summary?.querySelector('img[alt="SOL" i]'));
   const holding = numberAfterLabel(summaryText, ["Holding", "Position"]);
   const sold = numberAfterLabel(summaryText, ["Sold"]);
-  const tradeEvents = captureAxiomTrades();
 
   return ShareContextSchema.parse({
     id: crypto.randomUUID(),
@@ -287,7 +146,6 @@ function buildShareContext(): ShareContext {
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
-    tradeEvents,
     walletAddress: null,
     walletLabel: null,
     boughtSol: summaryUsesSol ? numberAfterLabel(summaryText, ["Bought", "Invested"]) : null,
@@ -296,8 +154,24 @@ function buildShareContext(): ShareContext {
     pnlSol: summaryUsesSol ? numberAfterLabel(summaryText, ["PNL", "P&L"]) : null,
     roiPercent: percentageAfterPnl(summaryText),
     positionStatus: sold && holding === "0" ? "closed" : holding && holding !== "0" ? "open" : "unknown",
-    sourceText: `${summaryText}\n${tradeEvents.map((trade) => `${trade.displayAge ?? ""} ${trade.side} ${trade.tokenAmount ?? "?"} ${trade.quoteSol} SOL ${trade.signature ?? ""}`).join("\n")}`.slice(0, 20_000),
+    sourceText: summaryText.slice(0, 20_000),
   });
+}
+
+async function retrieveCurrentTradeContext(): Promise<ShareContext> {
+  const context = buildShareContext();
+  if (!context.pairAddress) throw new Error("The current Axiom URL does not contain a pair address.");
+  const walletAddresses = await loadTradingWalletAddresses();
+  const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
+  const enrichedContext = ShareContextSchema.parse({
+    ...context,
+    tradeExecutions,
+    walletAddresses,
+    walletAddress: walletAddresses[0] ?? null,
+    walletLabel: walletAddresses.length > 1 ? `${walletAddresses.length} wallets` : null,
+  });
+  await saveShareContext(enrichedContext);
+  return enrichedContext;
 }
 
 function findShareDialog(): HTMLElement | null {
@@ -354,7 +228,6 @@ export default defineContentScript({
     };
 
     const openInstant = async () => {
-      await activatePersonalTrades();
       const context = buildShareContext();
       await saveShareContext(context);
       if (!overlayHost) {
@@ -393,11 +266,15 @@ export default defineContentScript({
       if (message.type === "OPEN_WICKLAPSE_INSTANT") {
         return openInstant().then(() => ({ ok: true }));
       }
+      if (message.type === "FETCH_AXIOM_EXECUTIONS") {
+        return retrieveCurrentTradeContext()
+          .then((context) => ({ ok: true, context }))
+          .catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : "Axiom trade lookup failed." }));
+      }
       if (message.type !== "CAPTURE_ACTIVE_AXIOM_TRADE") return undefined;
 
       return Promise.resolve().then(async () => {
-        const context = buildShareContext();
-        await saveShareContext(context);
+        const context = await retrieveCurrentTradeContext();
         return { ok: true, contextId: context.id };
       });
     };

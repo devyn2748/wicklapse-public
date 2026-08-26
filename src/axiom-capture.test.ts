@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShareContext } from "./domain";
-import { ageToSeconds, buildAxiomCaptureEpisodes, normalizeAxiomNumber } from "./axiom-capture";
+import { ageToSeconds, buildAxiomExecutionEpisodes, normalizeAxiomNumber } from "./axiom-capture";
 
 describe("normalizeAxiomNumber", () => {
   it("expands suffixes and Axiom compact-zero notation", () => {
@@ -16,13 +16,16 @@ describe("normalizeAxiomNumber", () => {
 });
 
 describe("buildAxiomCaptureEpisodes", () => {
-  it("turns newest-first Axiom rows into a chronological captured episode", () => {
+  it("turns multiple-wallet buys and partial sells into a chronological episode", () => {
+    const pairAddress = "4".repeat(44);
+    const firstWallet = "5".repeat(44);
+    const secondWallet = "6".repeat(44);
     const context: ShareContext = {
       id: "axiom-capture",
       capturedAt: 1_800_000_000_000,
       pageUrl: "https://axiom.trade/meme/Pair1111111111111111111111111111111111111",
       tokenMint: "Mint1111111111111111111111111111111111111",
-      pairAddress: "Pair1111111111111111111111111111111111111",
+      pairAddress,
       symbol: "TEST",
       tokenName: "Test",
       walletAddress: null,
@@ -34,37 +37,69 @@ describe("buildAxiomCaptureEpisodes", () => {
       roiPercent: "200",
       positionStatus: "closed",
       sourceText: "",
-      tradeEvents: [
+      walletAddresses: [firstWallet, secondWallet],
+      tradeExecutions: [
         {
-          id: "sell",
+          signature: "9".repeat(88),
           side: "sell",
-          tokenAmount: "100",
-          quoteSol: "3",
-          marketCapUsd: "3000000",
-          timestamp: null,
-          displayAge: "2d",
-          signature: null,
-          rowIndex: 0,
+          tokenAmount: "110",
+          priceSol: "0.03",
+          priceUsd: "4.5",
+          totalSol: "3.3",
+          totalUsd: "495",
+          timestamp: 1_799_000_300,
+          wallet: secondWallet,
+          pairAddress,
+          source: "axiom",
         },
         {
-          id: "buy",
+          signature: "7".repeat(88),
           side: "buy",
           tokenAmount: "100",
-          quoteSol: "1",
-          marketCapUsd: "1000000",
-          timestamp: null,
-          displayAge: "5d",
-          signature: null,
-          rowIndex: 1,
+          priceSol: "0.01",
+          priceUsd: "1.5",
+          totalSol: "1",
+          totalUsd: "150",
+          timestamp: 1_799_000_000,
+          wallet: firstWallet,
+          pairAddress,
+          source: "axiom",
+        },
+        {
+          signature: "8".repeat(88),
+          side: "buy",
+          tokenAmount: "50",
+          priceSol: "0.012",
+          priceUsd: "1.8",
+          totalSol: "0.6",
+          totalUsd: "90",
+          timestamp: 1_799_000_100,
+          wallet: secondWallet,
+          pairAddress,
+          source: "axiom",
+        },
+        {
+          signature: "A".repeat(88),
+          side: "sell",
+          tokenAmount: "40",
+          priceSol: "0.02",
+          priceUsd: "3",
+          totalSol: "0.8",
+          totalUsd: "120",
+          timestamp: 1_799_000_200,
+          wallet: firstWallet,
+          pairAddress,
+          source: "axiom",
         },
       ],
     };
 
-    const [episode] = buildAxiomCaptureEpisodes(context);
-    expect(episode?.fills.map((fill) => fill.side)).toEqual(["buy", "sell"]);
+    const [episode] = buildAxiomExecutionEpisodes(context);
+    expect(episode?.fills.map((fill) => fill.side)).toEqual(["buy", "buy", "sell", "sell"]);
     expect(episode?.fills.every((fill) => fill.source === "axiom")).toBe(true);
+    expect(new Set(episode?.fills.map((fill) => fill.wallet))).toEqual(new Set([firstWallet, secondWallet]));
     expect(episode?.status).toBe("closed");
-    expect(episode?.approximatePnlLamports).toBe("2000000000");
+    expect(episode?.approximatePnlLamports).toBe("2500000000");
     expect(episode?.matchLabel).toBe("Axiom capture");
   });
 });

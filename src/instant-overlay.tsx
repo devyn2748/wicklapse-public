@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState, type JSX } from "react";
-import { buildAxiomCaptureEpisodes } from "./axiom-capture";
+import { fetchAxiomExecutions } from "./axiom-api";
+import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { exportReplayVideo, type SoundName } from "./export-video";
 import { createReplaySpec } from "./replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName } from "./renderer";
 import {
   loadStudioSettings,
+  loadTradingWalletAddresses,
   saveProject,
+  saveShareContext,
   saveStudioSettings,
 } from "./storage";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
@@ -97,18 +100,30 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const buildCapturedReplay = useCallback(async () => {
     setError("");
     try {
-      setStatus("Reading your Axiom trades…");
-      const episodes = buildAxiomCaptureEpisodes(context);
+      if (!context.pairAddress) throw new Error("Open Wicklapse from an Axiom /meme/{pairAddress} coin page.");
+      const walletAddresses = await loadTradingWalletAddresses();
+      setStatus(`Retrieving executions for ${walletAddresses.length || "your"} wallet${walletAddresses.length === 1 ? "" : "s"}…`);
+      const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
+      if (!tradeExecutions.length) {
+        throw new Error("No trades found for the configured wallet(s) on this token.");
+      }
+      const enrichedContext: ShareContext = {
+        ...context,
+        tradeExecutions,
+        walletAddresses,
+        walletAddress: walletAddresses[0] ?? null,
+        walletLabel: walletAddresses.length > 1 ? `${walletAddresses.length} wallets` : null,
+      };
+      await saveShareContext(enrichedContext);
+      const episodes = buildAxiomExecutionEpisodes(enrichedContext);
       const episode = episodes[0];
       if (!episode) {
-        throw new Error(
-          "Wicklapse could not capture any personal trade rows. Close this window, select YOU in Axiom's Trades table, then open Wicklapse again.",
-        );
+        throw new Error("No replayable buys or sells were found for the configured wallet(s) on this token.");
       }
-      setStatus(`Building from ${episode.fills.length} Axiom trade${episode.fills.length === 1 ? "" : "s"}…`);
-      const nextSpec = await createReplaySpec(episode, context, context.walletAddress ?? "");
+      setStatus(`Building from ${episode.fills.length} Axiom execution${episode.fills.length === 1 ? "" : "s"}…`);
+      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "");
       setSpec(nextSpec);
-      await saveProject({ shareContext: context, replaySpec: nextSpec, selectedEpisodeId: episode.id });
+      await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
       setView("instant");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The trade could not be resolved.");
@@ -192,7 +207,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
 
         {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>Axiom trade capture and rendering remain on this device.</p></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">AXIOM CAPTURE NEEDED</div><h1>We couldn’t read your trade rows yet.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close & select YOU</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open Advanced fallback</button></div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open wallet settings</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><div className="wick-format"><span>VIDEO FORMAT</span><b>1:1 FEED · 1080 × 1080</b></div><Preview spec={spec} settings={settings} /></section>

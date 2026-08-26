@@ -19,6 +19,17 @@ async function openInstantOnAxiom(tab: Browser.tabs.Tab): Promise<boolean> {
   }
 }
 
+async function refreshAxiomTrade(pairAddress: string | null): Promise<unknown> {
+  const tabs = await browser.tabs.query({ url: ["https://axiom.trade/meme/*", "https://*.axiom.trade/meme/*"] });
+  const matchingTab = tabs.find((tab) => tab.id && (!pairAddress || tab.url?.includes(`/meme/${pairAddress}`)));
+  if (!matchingTab?.id) return { ok: false, error: "Keep the matching Axiom coin page open, then try Generate Replay again." };
+  try {
+    return await browser.tabs.sendMessage(matchingTab.id, { type: "FETCH_AXIOM_EXECUTIONS" });
+  } catch {
+    return { ok: false, error: "Reload the open Axiom coin page so Wicklapse can retrieve its trades." };
+  }
+}
+
 async function ensureRpcPermission(endpoint: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const url = new URL(endpoint);
@@ -98,6 +109,10 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message: unknown) => {
     if (!message || typeof message !== "object" || !("type" in message)) return undefined;
     if (message.type === "OPEN_ADVANCED_STUDIO") return openStudio().then(() => ({ ok: true }));
+    if (message.type === "WICKLAPSE_REFRESH_AXIOM_TRADE") {
+      const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
+      return refreshAxiomTrade(pairAddress);
+    }
     if (message.type === "WICKLAPSE_ENSURE_RPC_PERMISSION" && "endpoint" in message && typeof message.endpoint === "string") {
       return ensureRpcPermission(message.endpoint);
     }
