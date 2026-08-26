@@ -211,6 +211,7 @@ input::placeholder { color: #4f6058; }
 .media-upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .media-upload-grid label { min-height: 58px; padding: 10px; place-items: center; border: 1px dashed var(--border-strong); border-radius: 9px; color: var(--green); cursor: pointer; }
 .media-upload-grid input { display: none; }
+.local-asset-note { color: var(--muted); font: 600 8px/1.5 ui-monospace, SFMono-Regular, monospace; }
 .export-card dl { margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .export-card dl div { padding: 8px 10px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .export-card dl div:last-child { border: 0; }

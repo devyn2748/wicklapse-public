@@ -19,7 +19,7 @@ Instant Export sends the current `/meme/{pairAddress}` and the saved public trad
 2. Confirm the Wicklapse entry appears once and does not interfere with Axiom's controls.
 3. Save one or more public Axiom trading wallets in Advanced, separated by commas, then return to the coin page.
 4. Confirm Instant Export opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill.
-5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and buy/sell sounds.
+5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and Buy/Sell sound dropdown choices.
 6. Export the video and verify its duration, 1920×1080 dimensions, audio timing, running mark-to-market P&L, OHLC candles, and buy/sell markers.
 7. Open Advanced and test 1:1, 9:16, 4:5, 16:9, custom dimensions, wallet visibility, value precision, a background image, and uploaded music.
 8. Close and reopen Wicklapse to confirm the Axiom-first Instant flow remains available.
@@ -46,6 +46,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
 - Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
+- Advanced custom Buy/Sell sound uploads (up to 8 MB each) with partial fills consolidated to the same audible event as their visible marker
 - Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
 - SOL/USD presentation
 - Local canvas preview and video export

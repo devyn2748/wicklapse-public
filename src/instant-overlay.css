@@ -1,6 +1,6 @@
 :host { all: initial; color-scheme: dark; }
 * { box-sizing: border-box; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 .wick-backdrop { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; padding: 26px; background: rgba(0, 3, 2, .82); backdrop-filter: blur(13px); color: #f2fff8; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .wick-modal { width: min(1240px, calc(100vw - 52px)); max-height: calc(100vh - 52px); overflow: hidden; display: grid; grid-template-rows: 66px minmax(0, 1fr) 42px; border: 1px solid rgba(131, 178, 156, .24); border-radius: 24px; background: #070a09; box-shadow: 0 40px 140px rgba(0, 0, 0, .7), 0 0 80px rgba(22, 237, 149, .05); }
 .wick-modal.wick-setup, .wick-modal.wick-error, .wick-modal.wick-booting, .wick-modal.wick-resolving { width: min(520px, calc(100vw - 36px)); }
@@ -65,6 +65,8 @@ button, input { font: inherit; }
 .wick-themes i.minimal { background: linear-gradient(135deg, #101213, #8c9993); }
 .wick-control-grid { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 16px; }
 .wick-control-grid > :first-child { grid-column: 1 / -1; }
+.wick-sound-select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid rgba(131, 178, 156, .18); border-radius: 9px; outline: 0; background: #131716; color: #d8e8df; font-size: 10px; font-weight: 750; cursor: pointer; }
+.wick-sound-select:focus { border-color: rgba(22, 237, 149, .58); box-shadow: 0 0 0 3px rgba(22, 237, 149, .07); }
 .wick-export-zone { margin-top: auto; padding-top: 18px; display: grid; gap: 10px; }
 .wick-export { height: 56px; font-size: 14px; letter-spacing: .02em; }
 .wick-bottom-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }

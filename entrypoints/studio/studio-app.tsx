@@ -22,7 +22,7 @@ import {
 import { normalizeWalletAddresses } from "../../src/axiom-api";
 import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { buildReplayPoints, buildTradeEpisodes, solFromLamports } from "../../src/episodes";
-import { exportReplayVideo, type SoundName } from "../../src/export-video";
+import { exportReplayVideo, playReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec } from "../../src/replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
@@ -160,15 +160,44 @@ function PreviewCanvas({
   spec,
   settings,
   backgroundImage,
+  buyCustomBuffer,
+  sellCustomBuffer,
 }: {
   spec: ReplaySpec;
   settings: StudioSettings;
   backgroundImage: ImageBitmap | null;
+  buyCustomBuffer: AudioBuffer | null;
+  sellCustomBuffer: AudioBuffer | null;
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioRef = useRef<AudioContext | null>(null);
+  const previousProgressRef = useRef(1);
+  const soundedEventsRef = useRef(new Set<string>());
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(1);
   const startRef = useRef(0);
+
+  const ensureAudio = useCallback(async () => {
+    const audio = audioRef.current ?? new AudioContext();
+    audioRef.current = audio;
+    if (audio.state === "suspended") await audio.resume();
+    return audio;
+  }, []);
+
+  const soundCrossedEvents = useCallback((previous: number, next: number) => {
+    if (next < previous) soundedEventsRef.current.clear();
+    const audio = audioRef.current;
+    if (!audio || audio.state !== "running") return;
+    const timeline = { duration: settings.duration, width: settings.width, height: settings.height };
+    for (const fill of replaySoundEvents(spec)) {
+      const at = replayEventOffset(fill, spec, timeline) / settings.duration;
+      if (at <= previous || at > next || soundedEventsRef.current.has(fill.signature)) continue;
+      soundedEventsRef.current.add(fill.signature);
+      const sound = fill.side === "buy" ? settings.buySound : settings.sellSound;
+      const customBuffer = fill.side === "buy" ? buyCustomBuffer : sellCustomBuffer;
+      playReplaySound(audio, sound, fill.side, customBuffer);
+    }
+  }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.duration, settings.height, settings.sellSound, settings.width, spec]);
 
   const draw = useCallback(
     (nextProgress: number) => {
@@ -198,6 +227,11 @@ function PreviewCanvas({
   );
 
   useEffect(() => draw(progress), [draw, progress]);
+  useEffect(() => () => {
+    const audio = audioRef.current;
+    audioRef.current = null;
+    if (audio && audio.state !== "closed") void audio.close();
+  }, []);
 
   useEffect(() => {
     if (!playing) return;
@@ -205,13 +239,15 @@ function PreviewCanvas({
     startRef.current = performance.now() - progress * settings.duration * 1_000;
     const frame = (now: number) => {
       const next = Math.min(1, (now - startRef.current) / (settings.duration * 1_000));
+      soundCrossedEvents(previousProgressRef.current, next);
+      previousProgressRef.current = next;
       setProgress(next);
       if (next >= 1) setPlaying(false);
       else frameId = requestAnimationFrame(frame);
     };
     frameId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(frameId);
-  }, [playing]);
+  }, [playing, settings.duration, soundCrossedEvents]);
 
   return (
     <div className="preview-shell">
@@ -223,8 +259,18 @@ function PreviewCanvas({
           className="icon-button"
           aria-label={playing ? "Pause" : "Play"}
           onClick={() => {
-            if (progress >= 1) setProgress(0);
-            setPlaying((value) => !value);
+            if (playing) {
+              setPlaying(false);
+              return;
+            }
+            void ensureAudio().then(() => {
+              if (progress >= 1) {
+                previousProgressRef.current = 0;
+                soundedEventsRef.current.clear();
+                setProgress(0);
+              } else previousProgressRef.current = progress;
+              setPlaying(true);
+            }).catch(() => undefined);
           }}
         >
           {playing ? "Ⅱ" : "▶"}
@@ -239,7 +285,10 @@ function PreviewCanvas({
           value={progress}
           onChange={(event) => {
             setPlaying(false);
-            setProgress(Number(event.target.value));
+            const next = Number(event.target.value);
+            previousProgressRef.current = next;
+            soundedEventsRef.current.clear();
+            setProgress(next);
           }}
         />
         <span>{settings.duration}s</span>
@@ -325,10 +374,18 @@ export function StudioApp(): JSX.Element {
   const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
   const [musicBuffer, setMusicBuffer] = useState<AudioBuffer | null>(null);
   const [musicStart, setMusicStart] = useState(0);
+  const [buyCustomBuffer, setBuyCustomBuffer] = useState<AudioBuffer | null>(null);
+  const [sellCustomBuffer, setSellCustomBuffer] = useState<AudioBuffer | null>(null);
+  const [buyCustomName, setBuyCustomName] = useState("");
+  const [sellCustomName, setSellCustomName] = useState("");
 
   useEffect(() => {
     void Promise.all([loadShareContext(), loadRpcSettings(), loadProject(), loadStudioSettings(), loadTradingWalletAddresses()]).then(([share, savedRpc, project, savedSettings, savedWallets]) => {
-      setSettings(savedSettings);
+      setSettings({
+        ...savedSettings,
+        buySound: savedSettings.buySound === "custom" ? "pulse" : savedSettings.buySound,
+        sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
+      });
       setWalletInput(savedWallets.join(", "));
       if (share) {
         setContext(share);
@@ -494,6 +551,8 @@ export function StudioApp(): JSX.Element {
         {
           buySound: settings.buySound,
           sellSound: settings.sellSound,
+          buyCustomBuffer,
+          sellCustomBuffer,
           musicBuffer,
           musicStart,
           musicVolume: 0.34,
@@ -538,6 +597,34 @@ export function StudioApp(): JSX.Element {
       setError("This audio file could not be decoded by Chrome.");
     } finally {
       await audio.close();
+    }
+  };
+
+  const loadEventSound = async (side: "buy" | "sell", event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setError("Custom event sounds must be 8 MB or smaller.");
+      return;
+    }
+    const audio = new AudioContext();
+    try {
+      const buffer = await audio.decodeAudioData(await file.arrayBuffer());
+      if (side === "buy") {
+        setBuyCustomBuffer(buffer);
+        setBuyCustomName(file.name);
+        patchSettings("buySound", "custom");
+      } else {
+        setSellCustomBuffer(buffer);
+        setSellCustomName(file.name);
+        patchSettings("sellSound", "custom");
+      }
+      setError("");
+    } catch {
+      setError("This event-sound file could not be decoded by Chrome.");
+    } finally {
+      await audio.close();
+      event.target.value = "";
     }
   };
 
@@ -681,7 +768,7 @@ export function StudioApp(): JSX.Element {
               <div><span>Guides: Safe Areas ON</span><b>85%</b></div>
             </div>
             <div className="canvas-stage">
-              <PreviewCanvas spec={spec} settings={settings} backgroundImage={backgroundImage} />
+              <PreviewCanvas spec={spec} settings={settings} backgroundImage={backgroundImage} buyCustomBuffer={buyCustomBuffer} sellCustomBuffer={sellCustomBuffer} />
             </div>
             {musicBuffer && <MusicTrimmer buffer={musicBuffer} clipDuration={settings.duration} start={musicStart} onStartChange={setMusicStart} />}
           </section>
@@ -737,7 +824,9 @@ export function StudioApp(): JSX.Element {
 
             <section className="inspector-card" id="advanced-audio">
               <h3>♫ Event audio</h3>
-              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option><option value="off">Off</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option><option value="off">Off</option></select></label></div>
+              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option>{buyCustomBuffer && <option value="custom">Custom · {buyCustomName}</option>}<option value="off">Off</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option>{sellCustomBuffer && <option value="custom">Custom · {sellCustomName}</option>}<option value="off">Off</option></select></label></div>
+              <div className="media-upload-grid"><label>{buyCustomName ? `Replace ${buyCustomName}` : "Upload buy sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("buy", event)} /></label><label>{sellCustomName ? `Replace ${sellCustomName}` : "Upload sell sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("sell", event)} /></label></div>
+              <small className="local-asset-note">Custom event sounds stay on this device and are used for the current studio session. The first five seconds of each file are available for playback.</small>
             </section>
 
             <section className="inspector-card" id="advanced-privacy">

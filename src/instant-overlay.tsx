@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, type JSX } from "react
 import { fetchAxiomExecutions } from "./axiom-api";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
-import { exportReplayVideo, playReplayTone, replayEventOffset, type SoundName } from "./export-video";
+import { exportReplayVideo, playReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec } from "./replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName } from "./renderer";
 import {
@@ -41,11 +41,11 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
     if (next < previous) soundedEventsRef.current.clear();
     const audio = audioRef.current;
     if (!audio || audio.state !== "running") return;
-    for (const fill of spec.episode.fills) {
-      const eventProgress = replayEventOffset(fill, spec, settings.duration) / settings.duration;
+    for (const fill of replaySoundEvents(spec)) {
+      const eventProgress = replayEventOffset(fill, spec, { duration: settings.duration, width: 960, height: 540 }) / settings.duration;
       if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
       soundedEventsRef.current.add(fill.signature);
-      playReplayTone(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
+      playReplaySound(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
     }
   }, [settings.buySound, settings.duration, settings.sellSound, spec]);
 
@@ -186,7 +186,13 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     void loadStudioSettings()
       .then((savedSettings) => {
         if (!active) return;
-        setSettings({ ...savedSettings, width: 1920, height: 1080 });
+        setSettings({
+          ...savedSettings,
+          width: 1920,
+          height: 1080,
+          buySound: savedSettings.buySound === "custom" ? "pulse" : savedSettings.buySound,
+          sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
+        });
         void buildCapturedReplay();
       })
       .catch(() => {
@@ -269,8 +275,8 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
             <div className="wick-control-section"><div className="wick-section-title"><h3>Visual theme</h3><span>Wicklapse</span></div><div className="wick-themes">{(["obsidian", "neon", "minimal"] as ThemeName[]).map((theme) => <button type="button" className={settings.theme === theme ? "is-selected" : ""} key={theme} onClick={() => patch("theme", theme)}><i className={theme} />{theme}</button>)}</div></div>
             <div className="wick-control-grid">
               <div className="wick-control-section"><h3>Currency</h3><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></div>
-              <div className="wick-control-section"><h3>Buy audio</h3><Segmented value={settings.buySound} options={[{ value: "pulse", label: "Pulse" }, { value: "chime", label: "Chime" }, { value: "off", label: "Off" }]} onChange={(value) => patch("buySound", value as SoundName)} /></div>
-              <div className="wick-control-section"><h3>Sell audio</h3><Segmented value={settings.sellSound} options={[{ value: "confirm", label: "Confirm" }, { value: "cash", label: "Cash" }, { value: "off", label: "Off" }]} onChange={(value) => patch("sellSound", value as SoundName)} /></div>
+              <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option><option value="off">Off</option></select></div>
+              <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option><option value="off">Off</option></select></div>
             </div>
             <div className="wick-export-zone">
               {error && <div className="wick-error">{error}</div>}

@@ -164,6 +164,43 @@ function eventProgress(fill: TradeFill, spec: ReplaySpec): number {
   return clamp((fill.timestamp - start) / span);
 }
 
+function inverseEaseOut(value: number): number {
+  return 1 - Math.cbrt(1 - clamp(value));
+}
+
+function inverseEaseInOut(value: number): number {
+  const y = clamp(value);
+  return y < 0.5
+    ? Math.cbrt(y / 4)
+    : 1 - Math.cbrt((1 - y) / 4);
+}
+
+function replayCandleInterval(spec: ReplaySpec): number {
+  const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
+  if (candles.length > 1) {
+    const middle = Math.floor(candles.length / 2);
+    return Math.max(1, candles[middle]!.timestamp - candles[middle - 1]!.timestamp);
+  }
+  return Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+}
+
+/** Returns the video progress where the renderer first reveals an execution marker. */
+export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, width: number, height: number): number {
+  if (width / height < 1.45) {
+    return 0.08 + inverseEaseInOut(eventProgress(fill, spec)) * (0.79 - 0.08);
+  }
+  const points = [...spec.points].sort((left, right) => left.timestamp - right.timestamp);
+  const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
+  const interval = replayCandleInterval(spec);
+  const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]?.timestamp ?? spec.episode.startTimestamp);
+  const chartEnd = Math.max(
+    spec.episode.endTimestamp,
+    candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)?.timestamp ?? spec.episode.endTimestamp,
+  );
+  const reveal = clamp((fill.timestamp - chartStart) / Math.max(1, chartEnd - chartStart));
+  return 0.015 + inverseEaseOut(reveal) * (0.8 - 0.015);
+}
+
 function interpolateReplay(points: ReplayPoint[], spec: ReplaySpec, timeline: number): { price: number; pnl: Decimal } {
   const timestamp = spec.episode.startTimestamp + timeline * Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp);
   return interpolateReplayAtTimestamp(points, timestamp);
@@ -676,9 +713,7 @@ function drawLandscapeReplayFrame(
     ? [...spec.points].sort((left, right) => left.timestamp - right.timestamp)
     : [{ timestamp: spec.episode.startTimestamp, priceSol: "0", pnlSol: "0" }];
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
-  const interval = candles.length > 1
-    ? Math.max(1, candles[Math.floor(candles.length / 2)]!.timestamp - candles[Math.floor(candles.length / 2) - 1]!.timestamp)
-    : Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+  const interval = replayCandleInterval(spec);
   const marketCapMultiplier = Number(spec.marketCapMultiplier ?? 0);
   const showMarketCap = config.chartMetric !== "price" && Number.isFinite(marketCapMultiplier) && marketCapMultiplier > 0;
   const chartValueFromPrice = (priceSol: number) => showMarketCap ? priceSol * marketCapMultiplier : priceSol;
