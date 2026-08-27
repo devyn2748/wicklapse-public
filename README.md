@@ -46,6 +46,7 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels
 - Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
 - Expanded-panel chart motion modes: progressive auto-fit (default), rolling follow, and a fixed full-timeline camera
+- Optional horizontal Average Buy and Average Sell levels that recalculate on every execution, plus a truthful Axiom ATH overlay that becomes a line only when the clip reaches ATH and otherwise stays as a top-edge value badge
 - Custom fractional video duration and lead/tail placement backed by real market history—for example, first buy at 3s and final sell at 7s in a 10s clip; clear either padding field to restore Auto
 - Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
 - Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade

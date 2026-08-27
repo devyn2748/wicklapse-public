@@ -23,6 +23,9 @@ export interface RenderConfig {
   chartAnimation?: ChartAnimation;
   chartLeadSeconds?: number | null;
   chartTrailSeconds?: number | null;
+  showAverageBuyLine?: boolean;
+  showAverageSellLine?: boolean;
+  showAthLine?: boolean;
 }
 
 const THEMES = {
@@ -290,6 +293,65 @@ function chartDisplayWindow(
   };
 }
 
+export interface ChartReferenceLine {
+  kind: "averageBuy" | "averageSell" | "ath";
+  priceSol: number | null;
+  placement: "line" | "top";
+  marketCapUsd?: number;
+}
+
+function volumeWeightedExecutionPrice(spec: ReplaySpec, side: "buy" | "sell", activeTimestamp: number): number | null {
+  let totalAmount = new Decimal(0);
+  let weightedPrice = new Decimal(0);
+  for (const fill of spec.episode.fills) {
+    if (fill.side !== side || fill.timestamp > activeTimestamp) continue;
+    const amount = new Decimal(fill.tokenAmountRaw || 0).div(new Decimal(10).pow(fill.tokenDecimals));
+    const price = new Decimal(fill.estimatedPriceSol || 0);
+    if (!amount.isFinite() || !price.isFinite() || amount.lte(0) || price.lte(0)) continue;
+    totalAmount = totalAmount.plus(amount);
+    weightedPrice = weightedPrice.plus(price.mul(amount));
+  }
+  if (totalAmount.lte(0)) return null;
+  const result = weightedPrice.div(totalAmount).toNumber();
+  return Number.isFinite(result) && result > 0 ? result : null;
+}
+
+export function chartReferenceLines(
+  spec: ReplaySpec,
+  config: Pick<RenderConfig, "showAverageBuyLine" | "showAverageSellLine" | "showAthLine">,
+  activeTimestamp = Number.POSITIVE_INFINITY,
+): ChartReferenceLine[] {
+  const lines: ChartReferenceLine[] = [];
+  if (config.showAverageBuyLine) {
+    const priceSol = volumeWeightedExecutionPrice(spec, "buy", activeTimestamp);
+    if (priceSol != null) lines.push({ kind: "averageBuy", priceSol, placement: "line" });
+  }
+  if (config.showAverageSellLine) {
+    const priceSol = volumeWeightedExecutionPrice(spec, "sell", activeTimestamp);
+    if (priceSol != null) lines.push({ kind: "averageSell", priceSol, placement: "line" });
+  }
+  if (config.showAthLine) {
+    const marketCapMultiplier = Number(spec.marketCapMultiplier ?? 0);
+    const capturedAth = Number(spec.athMarketCapUsd ?? 0);
+    const capturedAthPrice = Number.isFinite(capturedAth) && capturedAth > 0 && Number.isFinite(marketCapMultiplier) && marketCapMultiplier > 0
+      ? capturedAth / marketCapMultiplier
+      : null;
+    if (Number.isFinite(capturedAth) && capturedAth > 0) {
+      const athOccursInClip = capturedAthPrice != null && (spec.candles ?? []).some((candle) => {
+        const high = Number(candle.highSol);
+        return Number.isFinite(high) && high >= capturedAthPrice * 0.995;
+      });
+      lines.push({
+        kind: "ath",
+        priceSol: capturedAthPrice,
+        placement: athOccursInClip ? "line" : "top",
+        marketCapUsd: capturedAth,
+      });
+    }
+  }
+  return lines;
+}
+
 function replayCandleInterval(spec: ReplaySpec): number {
   if (spec.candleIntervalSeconds && Number.isFinite(spec.candleIntervalSeconds)) {
     return Math.max(1, spec.candleIntervalSeconds);
@@ -365,6 +427,68 @@ function drawPill(
   context.fillText(text, x + (options.paddingX ?? 16), y + height / 2 + 1);
   context.textBaseline = "alphabetic";
   return width;
+}
+
+function drawChartReferenceLines(
+  context: CanvasRenderingContext2D,
+  lines: ChartReferenceLine[],
+  yForPrice: (price: number) => number,
+  chartValueFromPrice: (price: number) => number,
+  showMarketCap: boolean,
+  plotX: number,
+  plotY: number,
+  plotWidth: number,
+  plotHeight: number,
+  unit: number,
+  theme: Theme,
+  config: RenderConfig,
+): void {
+  const placedLabels: number[] = [];
+  for (const line of lines) {
+    const color = line.kind === "averageBuy" ? theme.positive : line.kind === "averageSell" ? theme.negative : theme.accent;
+    const name = line.kind === "averageBuy" ? "AVG BUY" : line.kind === "averageSell" ? "AVG SELL" : "ATH";
+    const value = line.priceSol == null ? null : chartValueFromPrice(line.priceSol);
+    const formatted = line.kind === "ath" && line.marketCapUsd != null
+      ? formatMarketCap(line.marketCapUsd, config.marketCapFormat ?? "auto", config.marketCapThreshold)
+      : showMarketCap && value != null
+        ? formatMarketCap(value, config.marketCapFormat ?? "auto", config.marketCapThreshold)
+        : formatPrice(value ?? 0);
+    context.save();
+    if (line.placement === "top" || line.priceSol == null) {
+      context.font = `bold ${20 * unit}px ui-monospace, SFMono-Regular, monospace`;
+      const label = `${name} · ${formatted}`;
+      const labelWidth = context.measureText(label).width + 28 * unit;
+      drawPill(context, label, plotX + plotWidth - labelWidth - 12 * unit, plotY + 8 * unit, {
+        fill: theme.panelStrong,
+        stroke: `${color}dd`,
+        color,
+        fontSize: 20 * unit,
+        paddingX: 14 * unit,
+      });
+      context.restore();
+      continue;
+    }
+    const y = clamp(yForPrice(line.priceSol), plotY, plotY + plotHeight);
+    context.setLineDash(line.kind === "ath" ? [4 * unit, 7 * unit] : [14 * unit, 9 * unit]);
+    context.strokeStyle = `${color}b8`;
+    context.lineWidth = 2 * unit;
+    context.beginPath();
+    context.moveTo(plotX, y);
+    context.lineTo(plotX + plotWidth, y);
+    context.stroke();
+    context.setLineDash([]);
+    const desiredLabelY = clamp(y - 22 * unit, plotY + 4 * unit, plotY + plotHeight - 42 * unit);
+    const labelY = placedLabels.reduce((candidate, placed) => Math.abs(candidate - placed) < 42 * unit ? clamp(candidate + 44 * unit, plotY + 4 * unit, plotY + plotHeight - 42 * unit) : candidate, desiredLabelY);
+    placedLabels.push(labelY);
+    drawPill(context, `${name} · ${formatted}`, plotX + 12 * unit, labelY, {
+      fill: theme.panelStrong,
+      stroke: `${color}dd`,
+      color,
+      fontSize: 20 * unit,
+      paddingX: 14 * unit,
+    });
+    context.restore();
+  }
 }
 
 function drawSolanaGlyph(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, fill: string) {
@@ -597,7 +721,11 @@ function drawLandscapeReplayFrame(
   const rawPriceValues = animatedCandles.length
     ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
     : visiblePoints.map((point) => Number(point.priceSol));
-  const priceValues = rawPriceValues.map(chartValueFromPrice);
+  const referenceLines = chartReferenceLines(spec, config, activeTimestamp);
+  const priceValues = [
+    ...rawPriceValues.map(chartValueFromPrice),
+    ...referenceLines.filter((line) => line.placement === "line" && line.priceSol != null).map((line) => chartValueFromPrice(line.priceSol!)),
+  ];
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
@@ -696,6 +824,8 @@ function drawLandscapeReplayFrame(
       headY = visible.at(-1)!.y;
     }
   }
+
+  drawChartReferenceLines(context, referenceLines, yForPrice, chartValueFromPrice, showMarketCap, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
@@ -934,7 +1064,11 @@ function drawPortraitReplayFrame(
   const rawPriceValues = animatedCandles.length
     ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
     : visiblePoints.map((point) => Number(point.priceSol));
-  const priceValues = rawPriceValues.map(chartValueFromPrice);
+  const referenceLines = chartReferenceLines(spec, config, activeTimestamp);
+  const priceValues = [
+    ...rawPriceValues.map(chartValueFromPrice),
+    ...referenceLines.filter((line) => line.placement === "line" && line.priceSol != null).map((line) => chartValueFromPrice(line.priceSol!)),
+  ];
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
@@ -1033,6 +1167,8 @@ function drawPortraitReplayFrame(
       headY = visible.at(-1)!.y;
     }
   }
+
+  drawChartReferenceLines(context, referenceLines, yForPrice, chartValueFromPrice, showMarketCap, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];

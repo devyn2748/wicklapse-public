@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
+import { parseAxiomAthMarketCap } from "../../src/axiom-capture";
 import { extractAxiomPairContext } from "../../src/axiom-candles";
 import { fetchAxiomWalletAddresses } from "../../src/axiom-wallets";
 import { ShareContextSchema, type AxiomPairContext, type ShareContext } from "../../src/domain";
@@ -35,6 +36,19 @@ function numberAfterLabel(text: string, labels: string[]): string | null {
   for (const label of labels) {
     const match = normalized.match(new RegExp(`${label}[^0-9+\\-]{0,28}([+\\-]?[0-9][0-9,.]*)`, "i"));
     if (match?.[1]) return match[1].replaceAll(",", "").replace(/^\+/, "");
+  }
+  return null;
+}
+
+function findAthMarketCapUsd(): string | null {
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("div, span, p"))
+    .filter(isRendered)
+    .map((element) => ({ text: element.innerText.replace(/\s+/g, " ").trim(), area: element.getBoundingClientRect().width * element.getBoundingClientRect().height }))
+    .filter(({ text }) => text.length <= 100 && /\bATH\b/i.test(text))
+    .sort((left, right) => left.area - right.area || left.text.length - right.text.length);
+  for (const { text } of candidates) {
+    const value = parseAxiomAthMarketCap(text);
+    if (value) return value;
   }
   return null;
 }
@@ -206,6 +220,7 @@ function buildShareContext(): ShareContext {
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
+    athMarketCapUsd: findAthMarketCapUsd(),
     axiomChartUrl: pairContext?.chartBaseUrl ?? null,
     axiomPairContext: pairContext,
     walletAddress: null,

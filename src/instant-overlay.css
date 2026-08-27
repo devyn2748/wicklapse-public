@@ -18,6 +18,14 @@ button, input, select { font: inherit; }
 .wick-side-section label { display: grid; gap: 6px; color: #b9cbc1; font-size: 10px; font-weight: 750; }
 .wick-side-section input { width: 100%; height: 36px; padding: 0 11px; border: 1px solid rgba(131, 178, 156, .2); border-radius: 9px; outline: 0; background: #111614; color: #effff6; font-size: 11px; font-weight: 750; }
 .wick-side-section input:focus { border-color: rgba(22, 237, 149, .6); box-shadow: 0 0 0 3px rgba(22, 237, 149, .07); }
+.wick-check-list { display: grid; gap: 7px; }
+.wick-side-section .wick-check { min-height: 48px; padding: 8px 9px; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 9px; border: 1px solid rgba(131, 178, 156, .14); border-radius: 9px; background: #111614; cursor: pointer; }
+.wick-side-section .wick-check:has(input:checked) { border-color: rgba(22, 237, 149, .45); background: rgba(22, 237, 149, .07); }
+.wick-side-section .wick-check:has(input:disabled) { cursor: not-allowed; opacity: .48; }
+.wick-side-section .wick-check input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #16ed95; box-shadow: none; }
+.wick-check span { min-width: 0; display: grid; gap: 2px; }
+.wick-check b { color: #dff4e9; font-size: 10px; }
+.wick-check small { color: #71867b; font-size: 8px; font-weight: 500; }
 .wick-side-footer { display: flex; align-items: center; padding: 0 14px; border-top: 1px solid rgba(131, 178, 156, .14); color: #61736a; font: 500 8px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wick-modal.wick-setup, .wick-modal.wick-error, .wick-modal.wick-booting, .wick-modal.wick-resolving { width: min(520px, calc(100vw - 36px)); height: min(460px, calc(100vh - 28px)); }
 .wick-header { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid rgba(131, 178, 156, .15); background: rgba(11, 15, 14, .96); }

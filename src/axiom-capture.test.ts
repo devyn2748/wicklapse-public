@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ShareContext } from "./domain";
-import { buildAxiomExecutionEpisodes } from "./axiom-capture";
+import { buildAxiomExecutionEpisodes, parseAxiomAthMarketCap } from "./axiom-capture";
+
+describe("parseAxiomAthMarketCap", () => {
+  it("normalizes Axiom ATH labels with compact suffixes", () => {
+    expect(parseAxiomAthMarketCap("ATH $34.5M")).toBe("34500000");
+    expect(parseAxiomAthMarketCap("ATH\n$1.25B")).toBe("1250000000");
+    expect(parseAxiomAthMarketCap("ATH $251,659")).toBe("251659");
+    expect(parseAxiomAthMarketCap("Price $0.03")).toBeNull();
+  });
+});
 
 describe("buildAxiomCaptureEpisodes", () => {
   it("turns multiple-wallet buys and partial sells into a chronological episode", () => {

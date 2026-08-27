@@ -27,6 +27,9 @@ export interface StudioSettings {
   chartAnimation: ChartAnimation;
   chartLeadSeconds: number | null;
   chartTrailSeconds: number | null;
+  showAverageBuyLine: boolean;
+  showAverageSellLine: boolean;
+  showAthLine: boolean;
 }
 
 const soundNames = new Set<string>([
@@ -54,6 +57,9 @@ export const StudioSettingsSchema = z.object({
   chartAnimation: z.enum(["progressive", "follow", "fixed"]),
   chartLeadSeconds: z.number().finite().min(0).max(60).nullable(),
   chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
+  showAverageBuyLine: z.boolean(),
+  showAverageSellLine: z.boolean(),
+  showAthLine: z.boolean(),
 });
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -76,6 +82,9 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   chartAnimation: "progressive",
   chartLeadSeconds: null,
   chartTrailSeconds: null,
+  showAverageBuyLine: false,
+  showAverageSellLine: false,
+  showAthLine: false,
 };
 
 export const ASPECT_PRESETS = [

@@ -78,6 +78,9 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
       chartAnimation: settings.chartAnimation,
       chartLeadSeconds: settings.chartLeadSeconds,
       chartTrailSeconds: settings.chartTrailSeconds,
+      showAverageBuyLine: settings.showAverageBuyLine,
+      showAverageSellLine: settings.showAverageSellLine,
+      showAthLine: settings.showAthLine,
       marketCapFormat: settings.marketCapFormat,
       marketCapThreshold: settings.marketCapThreshold,
       width: canvas.width,
@@ -344,6 +347,9 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
         chartAnimation: settings.chartAnimation,
         chartLeadSeconds: settings.chartLeadSeconds,
         chartTrailSeconds: settings.chartTrailSeconds,
+        showAverageBuyLine: settings.showAverageBuyLine,
+        showAverageSellLine: settings.showAverageSellLine,
+        showAthLine: settings.showAthLine,
         marketCapFormat: settings.marketCapFormat,
         marketCapThreshold: settings.marketCapThreshold,
         width: settings.aspectRatio === "9:16" ? 1080 : 1920,
@@ -381,6 +387,11 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
             <label>Chart after final sell<input key={`instant-trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto · 0.65s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value).then((changed) => { if (!changed) input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }); else input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
             <small>Values are positions within the exported video. Clear either field to return it to Auto.</small>
           </section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Horizontal levels</h3><span>Optional</span></div><div className="wick-check-list">
+            <label className="wick-check"><input type="checkbox" checked={settings.showAverageBuyLine} onChange={(event) => patch("showAverageBuyLine", event.target.checked)} /><span><b>Average Buy</b><small>Running token-volume-weighted buy price</small></span></label>
+            <label className="wick-check"><input type="checkbox" checked={settings.showAverageSellLine} onChange={(event) => patch("showAverageSellLine", event.target.checked)} /><span><b>Average Sell</b><small>Updates after every partial or full sell</small></span></label>
+            <label className="wick-check"><input type="checkbox" checked={settings.showAthLine} disabled={!spec.athMarketCapUsd} onChange={(event) => patch("showAthLine", event.target.checked)} /><span><b>Coin ATH</b><small>{spec.athMarketCapUsd ? "Line when reached in-clip; otherwise top badge" : "True ATH unavailable from Axiom"}</small></span></label>
+          </div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Custom clip length</h3><span>1–60 seconds</span></div><label>Video duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label></section>
         </div>
         <div className="wick-side-footer">Changes restart the preview automatically.</div>

@@ -323,6 +323,7 @@ export async function createReplaySpec(
     points: marketHistory?.points ?? fillPoints,
     candles: marketHistory?.candles,
     marketCapMultiplier,
+    athMarketCapUsd: context.athMarketCapUsd ?? null,
     currency: "SOL",
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,

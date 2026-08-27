@@ -57,6 +57,8 @@ export const ShareContextSchema = z.object({
   symbol: z.string().min(1).max(32),
   tokenName: z.string().max(120).nullable(),
   tokenImageUrl: z.string().url().nullable().optional(),
+  /** Axiom's displayed all-time-high market cap in USD, when available. */
+  athMarketCapUsd: DecimalStringSchema.nullable().optional(),
   /** A safe pair-chart-v3 URL observed on the active Axiom page (no auth material). */
   axiomChartUrl: z.string().url().nullable().optional(),
   axiomPairContext: AxiomPairContextSchema.nullable().optional(),
@@ -164,6 +166,7 @@ export interface ReplaySpec {
   candles?: ReplayCandle[];
   /** Multiply a candle's SOL-denominated token price by this value to obtain USD market cap. */
   marketCapMultiplier?: string | null;
+  athMarketCapUsd?: string | null;
   currency: Currency;
   usdPerSol: string | null;
   verified: boolean;

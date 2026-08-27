@@ -6,6 +6,15 @@ const TOKEN_DECIMALS = 9;
 const TOKEN_SCALE = new Decimal(10).pow(TOKEN_DECIMALS);
 const LAMPORTS = new Decimal(1_000_000_000);
 
+export function parseAxiomAthMarketCap(text: string): string | null {
+  const match = text.replace(/\s+/g, " ").match(/\bATH\b[^$0-9]{0,24}\$?\s*([0-9][0-9,.]*)([KMB])?\b/i);
+  if (!match?.[1]) return null;
+  const amount = Number(match[1].replaceAll(",", ""));
+  const scale = match[2]?.toUpperCase() === "B" ? 1_000_000_000 : match[2]?.toUpperCase() === "M" ? 1_000_000 : match[2]?.toUpperCase() === "K" ? 1_000 : 1;
+  const value = amount * scale;
+  return Number.isFinite(value) && value > 0 ? String(Math.round(value)) : null;
+}
+
 export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode[] {
   const tokenMint = context.tokenMint ?? context.pairAddress;
   if (!tokenMint || !context.tradeExecutions?.length) return [];

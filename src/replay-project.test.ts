@@ -56,6 +56,7 @@ const context: ShareContext = {
   pairAddress: "Pool1111111111111111111111111111111111111",
   symbol: "TEST",
   tokenName: null,
+  athMarketCapUsd: "34500000",
   walletAddress: null,
   walletLabel: null,
   boughtSol: "1",
@@ -116,6 +117,7 @@ describe("createReplaySpec", () => {
     }));
     const replay = await createReplaySpec(shortEpisode, context, context.walletAddress ?? "", "5s");
     expect(replay.candleIntervalSeconds).toBe(5);
+    expect(replay.athMarketCapUsd).toBe("34500000");
     expect(replay.candles).toHaveLength(2);
     expect(replay.candles?.[0]).toMatchObject({ openSol: "1", highSol: "3", lowSol: "0.5", closeSol: "2", volume: "7" });
     expect(replay.candles?.[1]).toMatchObject({ openSol: "3", highSol: "7", lowSol: "2", closeSol: "6", volume: "3" });
