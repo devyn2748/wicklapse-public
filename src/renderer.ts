@@ -433,8 +433,6 @@ function drawChartReferenceLines(
   context: CanvasRenderingContext2D,
   lines: ChartReferenceLine[],
   yForPrice: (price: number) => number,
-  chartValueFromPrice: (price: number) => number,
-  showMarketCap: boolean,
   plotX: number,
   plotY: number,
   plotWidth: number,
@@ -447,24 +445,16 @@ function drawChartReferenceLines(
   for (const line of lines) {
     const color = line.kind === "averageBuy" ? theme.positive : line.kind === "averageSell" ? theme.negative : theme.accent;
     const name = line.kind === "averageBuy" ? "AVG BUY" : line.kind === "averageSell" ? "AVG SELL" : "ATH";
-    const value = line.priceSol == null ? null : chartValueFromPrice(line.priceSol);
-    const formatted = line.kind === "ath" && line.marketCapUsd != null
-      ? formatMarketCap(line.marketCapUsd, config.marketCapFormat ?? "auto", config.marketCapThreshold)
-      : showMarketCap && value != null
-        ? formatMarketCap(value, config.marketCapFormat ?? "auto", config.marketCapThreshold)
-        : formatPrice(value ?? 0);
     context.save();
+    context.font = `bold ${12 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.textAlign = "right";
+    context.textBaseline = "middle";
+    context.fillStyle = color;
     if (line.placement === "top" || line.priceSol == null) {
-      context.font = `bold ${20 * unit}px ui-monospace, SFMono-Regular, monospace`;
-      const label = `${name} · ${formatted}`;
-      const labelWidth = context.measureText(label).width + 28 * unit;
-      drawPill(context, label, plotX + plotWidth - labelWidth - 12 * unit, plotY + 8 * unit, {
-        fill: theme.panelStrong,
-        stroke: `${color}dd`,
-        color,
-        fontSize: 20 * unit,
-        paddingX: 14 * unit,
-      });
+      const topLabel = line.kind === "ath" && line.marketCapUsd != null
+        ? `${name} ${formatMarketCap(line.marketCapUsd, config.marketCapFormat ?? "auto", config.marketCapThreshold)}`
+        : name;
+      context.fillText(topLabel, plotX - 8 * unit, plotY + 12 * unit);
       context.restore();
       continue;
     }
@@ -477,16 +467,10 @@ function drawChartReferenceLines(
     context.lineTo(plotX + plotWidth, y);
     context.stroke();
     context.setLineDash([]);
-    const desiredLabelY = clamp(y - 22 * unit, plotY + 4 * unit, plotY + plotHeight - 42 * unit);
-    const labelY = placedLabels.reduce((candidate, placed) => Math.abs(candidate - placed) < 42 * unit ? clamp(candidate + 44 * unit, plotY + 4 * unit, plotY + plotHeight - 42 * unit) : candidate, desiredLabelY);
+    const desiredLabelY = clamp(y, plotY + 8 * unit, plotY + plotHeight - 8 * unit);
+    const labelY = placedLabels.reduce((candidate, placed) => Math.abs(candidate - placed) < 16 * unit ? clamp(candidate + 18 * unit, plotY + 8 * unit, plotY + plotHeight - 8 * unit) : candidate, desiredLabelY);
     placedLabels.push(labelY);
-    drawPill(context, `${name} · ${formatted}`, plotX + 12 * unit, labelY, {
-      fill: theme.panelStrong,
-      stroke: `${color}dd`,
-      color,
-      fontSize: 20 * unit,
-      paddingX: 14 * unit,
-    });
+    context.fillText(name, plotX - 8 * unit, labelY);
     context.restore();
   }
 }
@@ -825,7 +809,7 @@ function drawLandscapeReplayFrame(
     }
   }
 
-  drawChartReferenceLines(context, referenceLines, yForPrice, chartValueFromPrice, showMarketCap, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
+  drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
@@ -1168,7 +1152,7 @@ function drawPortraitReplayFrame(
     }
   }
 
-  drawChartReferenceLines(context, referenceLines, yForPrice, chartValueFromPrice, showMarketCap, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
+  drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
