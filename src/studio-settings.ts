@@ -86,7 +86,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   candleInterval: "auto",
   aspectRatio: "16:9",
   backgroundStyle: "glow",
-  chartAnimation: "progressive",
+  chartAnimation: "fixed",
   chartStyle: "candlestick",
   chartLeadSeconds: null,
   chartTrailSeconds: null,
