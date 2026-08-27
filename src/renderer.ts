@@ -446,7 +446,7 @@ function drawChartReferenceLines(
     const color = line.kind === "averageBuy" ? theme.positive : line.kind === "averageSell" ? theme.negative : theme.accent;
     const name = line.kind === "averageBuy" ? "AVG BUY" : line.kind === "averageSell" ? "AVG SELL" : "ATH";
     context.save();
-    context.font = `bold ${12 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
     context.textAlign = "right";
     context.textBaseline = "middle";
     context.fillStyle = color;
