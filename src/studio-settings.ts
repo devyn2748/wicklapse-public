@@ -52,8 +52,8 @@ export const StudioSettingsSchema = z.object({
   aspectRatio: z.enum(["16:9", "9:16"]),
   backgroundStyle: z.enum(["glow", "solid", "grid", "particles"]),
   chartAnimation: z.enum(["progressive", "follow", "fixed"]),
-  chartLeadSeconds: z.number().finite().min(0).max(30).nullable(),
-  chartTrailSeconds: z.number().finite().min(0).max(30).nullable(),
+  chartLeadSeconds: z.number().finite().min(0).max(60).nullable(),
+  chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
 });
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {

@@ -41,10 +41,6 @@ import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "..
 
 type Stage = "connect" | "confirm" | "studio";
 const DEMO_MINT = "CybrLeek1111111111111111111111111111111111";
-const VIDEO_MARGIN_OPTIONS: Array<{ value: number | null; label: string }> = [
-  { value: null, label: "Auto" },
-  ...[0, 0.5, 1, 2, 3, 4, 5].map((value) => ({ value, label: `${value}s` })),
-];
 
 function demoFill(index: number, side: "buy" | "sell", quoteSol: string, price: string): TradeFill {
   const isLast = index === 7;
@@ -937,7 +933,8 @@ export function StudioApp(): JSX.Element {
               <div className="inspector-grid">
                 <label>Width<input type="number" min={320} max={3840} step={2} value={settings.width} onChange={(event) => patchSettings("width", Number(event.target.value))} /></label>
                 <label>Height<input type="number" min={320} max={3840} step={2} value={settings.height} onChange={(event) => patchSettings("height", Number(event.target.value))} /></label>
-                <div className="field-group"><span>Duration</span><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
+                <div className="field-group"><span>Duration presets</span><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
+                <label>Custom duration (seconds)<input key={`duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value); else event.currentTarget.value = String(settings.duration); }} /></label>
                 <div className="field-group"><span>Frame rate</span><Segmented value={settings.fps} options={[{ value: 30, label: "30 FPS" }, { value: 60, label: "60 FPS" }]} onChange={(value) => patchSettings("fps", value)} /></div>
               </div>
             </section>
@@ -947,8 +944,8 @@ export function StudioApp(): JSX.Element {
               <div className="inspector-grid">
                 <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : ""}</span><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
                 <label>Chart animation<select value={settings.chartAnimation} onChange={(event) => patchSettings("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom (default)</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select></label>
-                <label>First buy at<select value={settings.chartLeadSeconds ?? "auto"} onChange={(event) => void changeChartTiming("chartLeadSeconds", event.target.value === "auto" ? null : Number(event.target.value))}>{VIDEO_MARGIN_OPTIONS.map((option) => <option key={option.label} value={option.value ?? "auto"}>{option.label}</option>)}</select></label>
-                <label>Tail after last sell<select value={settings.chartTrailSeconds ?? "auto"} onChange={(event) => void changeChartTiming("chartTrailSeconds", event.target.value === "auto" ? null : Number(event.target.value))}>{VIDEO_MARGIN_OPTIONS.map((option) => <option key={option.label} value={option.value ?? "auto"}>{option.label}</option>)}</select></label>
+                <label>First buy at (video seconds)<input key={`lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto (0.12s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value); else event.currentTarget.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
+                <label>Chart after final sell (seconds)<input key={`trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto (0.65s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value); else event.currentTarget.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
                 <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
                 <div className="field-group"><span>Market-cap labels</span><Segmented value={settings.marketCapFormat} options={[{ value: "auto", label: "Auto K/M" }, { value: "thousands", label: "Force K" }, { value: "millions", label: "Force M" }]} onChange={(value) => patchSettings("marketCapFormat", value)} /></div>
                 <label>Auto K→M threshold<input type="number" min={1_000} max={1_000_000_000} step={100_000} value={settings.marketCapThreshold} onChange={(event) => patchSettings("marketCapThreshold", Math.max(1_000, Number(event.target.value) || 1_000_000))} /></label>
