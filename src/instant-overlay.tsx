@@ -73,6 +73,7 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
       theme: settings.theme,
       backgroundStyle: settings.backgroundStyle,
       affiliateLink: settings.affiliateLink,
+      speedrunMode: settings.speedrunMode,
       exactValues: settings.exactValues,
       walletVisibility: settings.walletVisibility,
       chartMetric: settings.chartMetric,
@@ -343,6 +344,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
         theme: settings.theme,
       backgroundStyle: settings.backgroundStyle,
       affiliateLink: settings.affiliateLink,
+      speedrunMode: settings.speedrunMode,
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
@@ -382,7 +384,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
       {expanded && view === "instant" && spec && <aside className="wick-side-panel" aria-label="Expanded replay controls">
         <div className="wick-side-header"><div><span>EXPANDED CONTROLS</span><strong>Replay controls</strong></div><button type="button" aria-label="Collapse controls" onClick={() => setExpanded(false)}>→</button></div>
         <div className="wick-side-content">
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Progressive</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Progressive</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p><div className="wick-check-list" style={{ marginTop: '12px' }}><label className="wick-check"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patch("speedrunMode", event.target.checked)} /><span><b>Cinematic Speedrun</b><small>Accelerates time between trades, slows down during trades.</small></span></label></div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Currency</h3><span>{settings.currency}</span></div><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s clip</span></div>
             <label>First buy at<input key={`instant-lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto · 0.12s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value).then((changed) => { if (!changed) input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }); else input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>

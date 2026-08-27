@@ -27,6 +27,7 @@ export interface RenderConfig {
   showAverageSellLine?: boolean;
   showAthLine?: boolean;
   affiliateLink?: string;
+  speedrunMode?: boolean;
 }
 
 const THEMES = {
@@ -559,6 +560,46 @@ function drawBackground(
   roundedRect(context, padding, padding, width - padding * 2, height - padding * 2, isLandscape ? 24 * unit : 40 * unit);
   context.stroke();
 }
+
+function calculateSpeedrunReveal(progress: number, startTimestamp: number, endTimestamp: number, trades: number[], interval: number): number {
+  if (trades.length === 0 || endTimestamp <= startTimestamp) return replayEase(progress);
+  
+  const span = endTimestamp - startTimestamp;
+  const segments = 200;
+  const step = span / segments;
+  const hotZoneRadius = Math.max(interval * 2, span * 0.05); // +/- 5% of timeline or 2 candles
+
+  const weights = new Float64Array(segments);
+  let totalWeight = 0;
+
+  for (let i = 0; i < segments; i++) {
+    const t = startTimestamp + i * step;
+    let inHotZone = false;
+    for (const trade of trades) {
+      if (Math.abs(t - trade) <= hotZoneRadius) {
+        inHotZone = true;
+        break;
+      }
+    }
+    const weight = inHotZone ? 6.0 : 1.0; // 6x slower in hot zones
+    weights[i] = weight;
+    totalWeight += weight;
+  }
+
+  const targetWeight = progress * totalWeight;
+  let accumulated = 0;
+
+  for (let i = 0; i < segments; i++) {
+    const nextAccumulated = accumulated + weights[i]!;
+    if (nextAccumulated >= targetWeight) {
+      const fraction = (targetWeight - accumulated) / weights[i]!;
+      return (i + fraction) / segments;
+    }
+    accumulated = nextAccumulated;
+  }
+  return 1;
+}
+
 function drawLandscapeReplayFrame(
   context: CanvasRenderingContext2D,
   spec: ReplaySpec,
@@ -586,7 +627,11 @@ function drawLandscapeReplayFrame(
   const intro = 1; // Removed fade-in so video doesn't start blank
   const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
   const replayTiming = replayWindow(config.duration, true);
-  const chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
+    let chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
+  if (config.speedrunMode && !explicitTiming) {
+    const trades = spec.episode.fills.map(f => f.timestamp);
+    chartReveal = calculateSpeedrunReveal(phase(progress, replayTiming.start, replayTiming.end), chartStart, chartEnd, trades, interval);
+  }
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
@@ -941,7 +986,11 @@ function drawPortraitReplayFrame(
   const intro = 1; // Removed fade-in
   const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
   const replayTiming = replayWindow(config.duration, false);
-  const chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
+    let chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
+  if (config.speedrunMode && !explicitTiming) {
+    const trades = spec.episode.fills.map(f => f.timestamp);
+    chartReveal = calculateSpeedrunReveal(phase(progress, replayTiming.start, replayTiming.end), chartStart, chartEnd, trades, interval);
+  }
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
