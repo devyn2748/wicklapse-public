@@ -28,6 +28,11 @@ export interface AxiomCandleRequest {
   countBars: number;
 }
 
+export interface CandleTimeWindow {
+  fromSeconds: number;
+  toSeconds: number;
+}
+
 interface AxiomBarsPayload {
   bars?: unknown;
 }
@@ -142,6 +147,7 @@ export function buildAxiomCandleRequest(
   context: ShareContext,
   episode: TradeEpisode,
   preference: CandleIntervalPreference = "auto",
+  timeWindow?: CandleTimeWindow,
 ): AxiomCandleRequest | null {
   if (!context.pairAddress) return null;
 
@@ -165,12 +171,12 @@ export function buildAxiomCandleRequest(
     }
   }
 
-  const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  const spanSeconds = Math.max(1, (timeWindow?.toSeconds ?? episode.endTimestamp) - (timeWindow?.fromSeconds ?? episode.startTimestamp));
   const interval = selectAxiomInterval(spanSeconds, preference);
   const seconds = intervalSeconds(interval);
   const padding = Math.max(seconds * 2, Math.min(spanSeconds * 0.05, seconds * 10));
-  const fromSeconds = Math.max(0, episode.startTimestamp - padding);
-  const toSeconds = episode.endTimestamp + padding;
+  const fromSeconds = Math.max(0, timeWindow?.fromSeconds ?? episode.startTimestamp - padding);
+  const toSeconds = timeWindow?.toSeconds ?? episode.endTimestamp + padding;
   const requestedBuckets = Math.ceil((toSeconds - fromSeconds) / seconds) + 1;
   const countBars = Math.min(1_000, Math.max(30, requestedBuckets * 2));
 
@@ -248,8 +254,9 @@ export async function fetchAxiomCandles(
   episode: TradeEpisode,
   preference: CandleIntervalPreference = "auto",
   options: FetchAxiomCandleOptions = {},
+  timeWindow?: CandleTimeWindow,
 ): Promise<{ candles: ReplayCandle[]; interval: number } | null> {
-  const request = buildAxiomCandleRequest(context, episode, preference);
+  const request = buildAxiomCandleRequest(context, episode, preference, timeWindow);
   if (!request) return null;
   const response = await (options.fetchImpl ?? fetch)(request.url, {
     method: "GET",

@@ -4,6 +4,7 @@ import type { Currency, ReplayPoint, ReplaySpec, TradeFill } from "./domain";
 export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset" | "matrix" | "hacker";
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles";
 export type WalletVisibility = "hidden" | "short" | "full";
+export type ChartAnimation = "progressive" | "follow" | "fixed";
 
 export interface RenderConfig {
   duration: number;
@@ -19,6 +20,9 @@ export interface RenderConfig {
   marketCapFormat?: "auto" | "thousands" | "millions";
   marketCapThreshold?: number;
   backgroundImage?: CanvasImageSource | null;
+  chartAnimation?: ChartAnimation;
+  chartLeadSeconds?: number | null;
+  chartTrailSeconds?: number | null;
 }
 
 const THEMES = {
@@ -265,6 +269,27 @@ function replayWindow(duration: number, landscape: boolean): { start: number; en
   return { start, end };
 }
 
+function chartDisplayWindow(
+  animation: ChartAnimation,
+  chartStart: number,
+  chartEnd: number,
+  activeTimestamp: number,
+  interval: number,
+): { start: number; end: number } {
+  const paddedStart = chartStart - interval * 0.35;
+  const paddedEnd = chartEnd + interval * 0.35;
+  if (animation === "fixed") return { start: paddedStart, end: paddedEnd };
+  if (animation === "follow") {
+    const visibleSpan = Math.min(paddedEnd - paddedStart, Math.max(interval * 18, (chartEnd - chartStart) * 0.32));
+    const start = clamp(activeTimestamp - visibleSpan * 0.82, paddedStart, Math.max(paddedStart, paddedEnd - visibleSpan));
+    return { start, end: Math.min(paddedEnd, start + visibleSpan) };
+  }
+  return {
+    start: paddedStart,
+    end: Math.min(paddedEnd, Math.max(activeTimestamp + interval * 0.65, chartStart + interval * 3.5)),
+  };
+}
+
 function replayCandleInterval(spec: ReplaySpec): number {
   if (spec.candleIntervalSeconds && Number.isFinite(spec.candleIntervalSeconds)) {
     return Math.max(1, spec.candleIntervalSeconds);
@@ -273,8 +298,20 @@ function replayCandleInterval(spec: ReplaySpec): number {
 }
 
 /** Returns the video progress where the renderer first reveals an execution marker. */
-export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, width: number, height: number, duration: number): number {
+export function replayEventVisualProgress(
+  fill: TradeFill,
+  spec: ReplaySpec,
+  width: number,
+  height: number,
+  duration: number,
+  leadSeconds?: number | null,
+  trailSeconds?: number | null,
+): number {
   const landscape = width / height >= 1.45;
+  if ((leadSeconds != null || trailSeconds != null) && spec.chartStartTimestamp != null && spec.chartEndTimestamp != null) {
+    const reveal = clamp((fill.timestamp - spec.chartStartTimestamp) / Math.max(1, spec.chartEndTimestamp - spec.chartStartTimestamp));
+    return reveal;
+  }
   const window = replayWindow(duration, landscape);
   if (!landscape) {
     return window.start + inverseReplayEase(eventProgress(fill, spec)) * (window.end - window.start);
@@ -282,8 +319,8 @@ export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, wid
   const points = [...spec.points].sort((left, right) => left.timestamp - right.timestamp);
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
   const interval = replayCandleInterval(spec);
-  const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]?.timestamp ?? spec.episode.startTimestamp);
-  const chartEnd = Math.max(
+  const chartStart = spec.chartStartTimestamp ?? Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]?.timestamp ?? spec.episode.startTimestamp);
+  const chartEnd = spec.chartEndTimestamp ?? Math.max(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)?.timestamp ?? spec.episode.endTimestamp,
   );
@@ -431,15 +468,16 @@ function drawLandscapeReplayFrame(
   const marketCapMultiplier = Number(spec.marketCapMultiplier ?? 0);
   const showMarketCap = config.chartMetric !== "price" && Number.isFinite(marketCapMultiplier) && marketCapMultiplier > 0;
   const chartValueFromPrice = (priceSol: number) => showMarketCap ? priceSol * marketCapMultiplier : priceSol;
-  const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
-  const chartEnd = Math.max(
+  const chartStart = spec.chartStartTimestamp ?? Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
+  const chartEnd = spec.chartEndTimestamp ?? Math.max(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)!.timestamp,
   );
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = 1; // Removed fade-in so video doesn't start blank
+  const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
   const replayTiming = replayWindow(config.duration, true);
-  const chartReveal = replayEase(phase(progress, replayTiming.start, replayTiming.end));
+  const chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
@@ -577,11 +615,9 @@ function drawLandscapeReplayFrame(
   const plotY = chartY;
   const plotWidth = chartWidth;
   const plotHeight = chartHeight;
-  const displayStart = chartStart - interval * 0.35;
-  const displayEnd = Math.min(
-    chartEnd + interval * 0.35,
-    Math.max(activeTimestamp + interval * 0.65, chartStart + interval * 3.5),
-  );
+  const displayWindow = chartDisplayWindow(config.chartAnimation ?? "progressive", chartStart, chartEnd, activeTimestamp, interval);
+  const displayStart = displayWindow.start;
+  const displayEnd = displayWindow.end;
   const displaySpan = Math.max(interval, displayEnd - displayStart);
   const xForTime = (timestamp: number) => plotX + clamp((timestamp - displayStart) / displaySpan) * plotWidth;
   const yForPrice = (price: number) => plotY + (1 - clamp((chartValueFromPrice(price) - minimum) / (maximum - minimum))) * plotHeight;
@@ -775,15 +811,16 @@ function drawPortraitReplayFrame(
   const marketCapMultiplier = Number(spec.marketCapMultiplier ?? 0);
   const showMarketCap = config.chartMetric !== "price" && Number.isFinite(marketCapMultiplier) && marketCapMultiplier > 0;
   const chartValueFromPrice = (priceSol: number) => showMarketCap ? priceSol * marketCapMultiplier : priceSol;
-  const chartStart = Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
-  const chartEnd = Math.max(
+  const chartStart = spec.chartStartTimestamp ?? Math.min(spec.episode.startTimestamp, candles[0]?.timestamp ?? points[0]!.timestamp);
+  const chartEnd = spec.chartEndTimestamp ?? Math.max(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)!.timestamp,
   );
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = 1; // Removed fade-in
+  const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
   const replayTiming = replayWindow(config.duration, false);
-  const chartReveal = replayEase(phase(progress, replayTiming.start, replayTiming.end));
+  const chartReveal = explicitTiming ? progress : replayEase(phase(progress, replayTiming.start, replayTiming.end));
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
   const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
@@ -915,11 +952,9 @@ function drawPortraitReplayFrame(
   const plotY = chartY;
   const plotWidth = chartWidth;
   const plotHeight = chartHeight;
-  const displayStart = chartStart - interval * 0.35;
-  const displayEnd = Math.min(
-    chartEnd + interval * 0.35,
-    Math.max(activeTimestamp + interval * 0.65, chartStart + interval * 3.5),
-  );
+  const displayWindow = chartDisplayWindow(config.chartAnimation ?? "progressive", chartStart, chartEnd, activeTimestamp, interval);
+  const displayStart = displayWindow.start;
+  const displayEnd = displayWindow.end;
   const displaySpan = Math.max(interval, displayEnd - displayStart);
   const xForTime = (timestamp: number) => plotX + clamp((timestamp - displayStart) / displaySpan) * plotWidth;
   const yForPrice = (price: number) => plotY + (1 - clamp((chartValueFromPrice(price) - minimum) / (maximum - minimum))) * plotHeight;

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, createReplaySpec, LatestReplayRequest, selectCandleRequest } from "./replay-project";
+import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, LatestReplayRequest, selectCandleRequest } from "./replay-project";
 
 const fills: TradeFill[] = [
   {
@@ -70,6 +70,19 @@ const context: ShareContext = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("createReplaySpec", () => {
+  it("maps requested video lead and tail seconds onto real market history", () => {
+    const window = calculateReplayTimeWindow(episode, { duration: 10, leadSeconds: 3, trailSeconds: 3 });
+    expect(window?.fromSeconds).toBe(episode.startTimestamp - 225);
+    expect(window?.toSeconds).toBe(episode.endTimestamp + 225);
+    expect((episode.startTimestamp - window!.fromSeconds) / (window!.toSeconds - window!.fromSeconds)).toBeCloseTo(0.3, 8);
+    expect((episode.endTimestamp - window!.fromSeconds) / (window!.toSeconds - window!.fromSeconds)).toBeCloseTo(0.7, 8);
+  });
+
+  it("rejects video margins that leave no meaningful trade playback", () => {
+    expect(() => calculateReplayTimeWindow(episode, { duration: 6, leadSeconds: 3, trailSeconds: 3 }))
+      .toThrow("leave at least 0.25 seconds");
+  });
+
   it("keeps auto charts readable and honors supported candle overrides", () => {
     expect(selectCandleRequest(120, "auto").interval).toBe(1);
     expect(selectCandleRequest(10 * 60, "auto").interval).toBe(5);

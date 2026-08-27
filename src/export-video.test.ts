@@ -77,4 +77,17 @@ describe("replay audio timing", () => {
     };
     expect(replaySoundEvents(sparseSpec).map((event) => event.signature)).toEqual(["buy", "buy-partial", "sell"]);
   });
+
+  it("places the first buy and final sell at explicit video times", () => {
+    const timedSpec = { ...spec, chartStartTimestamp: 25, chartEndTimestamp: 275 };
+    const config = {
+      duration: 10,
+      width: 1920,
+      height: 1080,
+      chartLeadSeconds: 3,
+      chartTrailSeconds: 3,
+    };
+    expect(replayEventOffset(buy, timedSpec, config)).toBeCloseTo(3, 8);
+    expect(replayEventOffset(sell, timedSpec, config)).toBeCloseTo(7, 8);
+  });
 });

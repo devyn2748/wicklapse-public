@@ -169,6 +169,9 @@ export interface ReplaySpec {
   verified: boolean;
   marketDataSource?: "axiom" | "gecko" | "fills" | "ohlcv";
   candleIntervalSeconds?: number;
+  /** Explicit market-time range used to place entry/exit at requested video times. */
+  chartStartTimestamp?: number;
+  chartEndTimestamp?: number;
   tradeDataSource?: "rpc" | "axiom";
 }
 

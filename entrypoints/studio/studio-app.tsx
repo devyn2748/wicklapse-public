@@ -24,7 +24,7 @@ import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildTradeEpisodes, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
-import { drawReplayFrame, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
+import { drawReplayFrame, type ChartAnimation, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
 import {
   loadProject,
@@ -41,6 +41,10 @@ import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "..
 
 type Stage = "connect" | "confirm" | "studio";
 const DEMO_MINT = "CybrLeek1111111111111111111111111111111111";
+const VIDEO_MARGIN_OPTIONS: Array<{ value: number | null; label: string }> = [
+  { value: null, label: "Auto" },
+  ...[0, 0.5, 1, 2, 3, 4, 5].map((value) => ({ value, label: `${value}s` })),
+];
 
 function demoFill(index: number, side: "buy" | "sell", quoteSol: string, price: string): TradeFill {
   const isLast = index === 7;
@@ -189,7 +193,13 @@ function PreviewCanvas({
     if (next < previous) soundedEventsRef.current.clear();
     const audio = audioRef.current;
     if (!audio || audio.state !== "running") return;
-    const timeline = { duration: settings.duration, width: settings.width, height: settings.height };
+    const timeline = {
+      duration: settings.duration,
+      width: settings.width,
+      height: settings.height,
+      chartLeadSeconds: settings.chartLeadSeconds,
+      chartTrailSeconds: settings.chartTrailSeconds,
+    };
     for (const fill of replaySoundEvents(spec)) {
       const at = replayEventOffset(fill, spec, timeline) / settings.duration;
       if (at <= previous || at > next || soundedEventsRef.current.has(fill.signature)) continue;
@@ -198,7 +208,7 @@ function PreviewCanvas({
       const customBuffer = fill.side === "buy" ? buyCustomBuffer : sellCustomBuffer;
       void playReplaySound(audio, sound, fill.side, customBuffer);
     }
-  }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.duration, settings.height, settings.sellSound, settings.width, spec]);
+  }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.height, settings.sellSound, settings.width, spec]);
 
   const draw = useCallback(
     (nextProgress: number) => {
@@ -216,6 +226,9 @@ function PreviewCanvas({
           exactValues: settings.exactValues,
           walletVisibility: settings.walletVisibility,
           chartMetric: settings.chartMetric,
+          chartAnimation: settings.chartAnimation,
+          chartLeadSeconds: settings.chartLeadSeconds,
+          chartTrailSeconds: settings.chartTrailSeconds,
           marketCapFormat: settings.marketCapFormat,
           marketCapThreshold: settings.marketCapThreshold,
           width: canvas.width,
@@ -442,23 +455,63 @@ export function StudioApp(): JSX.Element {
     });
   };
 
-  const changeCandleInterval = async (value: CandleIntervalPreference) => {
-    patchSettings("candleInterval", value);
-    if (!spec || !context) return;
+  const rebuildChart = async (
+    value: CandleIntervalPreference,
+    leadSeconds: number | null,
+    trailSeconds: number | null,
+    duration = settings.duration,
+  ) => {
+    if (!spec || !context) return false;
     const request = replayRequestRef.current.begin();
     setCandleBusy(true);
     setError("");
     try {
-      const nextSpec = await createReplaySpec(spec.episode, context, spec.walletAddress, value, request.signal);
-      if (!replayRequestRef.current.isLatest(request.id)) return;
+      const nextSpec = await createReplaySpec(spec.episode, context, spec.walletAddress, value, request.signal, {
+        duration,
+        leadSeconds,
+        trailSeconds,
+      });
+      if (!replayRequestRef.current.isLatest(request.id)) return false;
       setSpec(nextSpec);
       await saveProject({ shareContext: context, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
+      return true;
     } catch (caught) {
-      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return false;
       setError(caught instanceof Error ? caught.message : "Could not refresh the selected candles.");
+      return false;
     } finally {
       if (replayRequestRef.current.isLatest(request.id)) setCandleBusy(false);
     }
+  };
+
+  const changeCandleInterval = async (value: CandleIntervalPreference) => {
+    patchSettings("candleInterval", value);
+    await rebuildChart(value, settings.chartLeadSeconds, settings.chartTrailSeconds);
+  };
+
+  const changeChartTiming = async (key: "chartLeadSeconds" | "chartTrailSeconds", value: number | null) => {
+    const leadSeconds = key === "chartLeadSeconds" ? value : settings.chartLeadSeconds;
+    const trailSeconds = key === "chartTrailSeconds" ? value : settings.chartTrailSeconds;
+    const effectiveLead = leadSeconds ?? 0.12;
+    const effectiveTrail = trailSeconds ?? 0.65;
+    if (effectiveLead + effectiveTrail > settings.duration - 0.25) {
+      setError("Lead-in and tail must leave at least 0.25 seconds for the trade itself.");
+      return;
+    }
+    if (await rebuildChart(settings.candleInterval, leadSeconds, trailSeconds)) patchSettings(key, value);
+  };
+
+  const changeDuration = async (duration: number) => {
+    const effectiveLead = settings.chartLeadSeconds ?? 0.12;
+    const effectiveTrail = settings.chartTrailSeconds ?? 0.65;
+    if (effectiveLead + effectiveTrail > duration - 0.25) {
+      setError("This duration is too short for the selected chart lead-in and tail.");
+      return;
+    }
+    if (settings.chartLeadSeconds != null || settings.chartTrailSeconds != null) {
+      if (!await rebuildChart(settings.candleInterval, settings.chartLeadSeconds, settings.chartTrailSeconds, duration)) return;
+    }
+    patchSettings("duration", duration);
   };
 
   const findTrade = async () => {
@@ -574,7 +627,11 @@ export function StudioApp(): JSX.Element {
     };
     const request = replayRequestRef.current.begin();
     try {
-      const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, sourceContext.walletAddress ?? rpc.walletAddress, settings.candleInterval, request.signal);
+      const nextSpec = await createReplaySpec(selectedEpisode, sourceContext, sourceContext.walletAddress ?? rpc.walletAddress, settings.candleInterval, request.signal, {
+        duration: settings.duration,
+        leadSeconds: settings.chartLeadSeconds,
+        trailSeconds: settings.chartTrailSeconds,
+      });
       if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
       setStage("studio");
@@ -597,6 +654,9 @@ export function StudioApp(): JSX.Element {
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
+        chartAnimation: settings.chartAnimation,
+        chartLeadSeconds: settings.chartLeadSeconds,
+        chartTrailSeconds: settings.chartTrailSeconds,
         marketCapFormat: settings.marketCapFormat,
         marketCapThreshold: settings.marketCapThreshold,
         width: settings.width,
@@ -877,7 +937,7 @@ export function StudioApp(): JSX.Element {
               <div className="inspector-grid">
                 <label>Width<input type="number" min={320} max={3840} step={2} value={settings.width} onChange={(event) => patchSettings("width", Number(event.target.value))} /></label>
                 <label>Height<input type="number" min={320} max={3840} step={2} value={settings.height} onChange={(event) => patchSettings("height", Number(event.target.value))} /></label>
-                <div className="field-group"><span>Duration</span><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patchSettings("duration", value)} /></div>
+                <div className="field-group"><span>Duration</span><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
                 <div className="field-group"><span>Frame rate</span><Segmented value={settings.fps} options={[{ value: 30, label: "30 FPS" }, { value: 60, label: "60 FPS" }]} onChange={(value) => patchSettings("fps", value)} /></div>
               </div>
             </section>
@@ -886,6 +946,9 @@ export function StudioApp(): JSX.Element {
               <h3>⌁ Chart presentation</h3>
               <div className="inspector-grid">
                 <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : ""}</span><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
+                <label>Chart animation<select value={settings.chartAnimation} onChange={(event) => patchSettings("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom (default)</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select></label>
+                <label>First buy at<select value={settings.chartLeadSeconds ?? "auto"} onChange={(event) => void changeChartTiming("chartLeadSeconds", event.target.value === "auto" ? null : Number(event.target.value))}>{VIDEO_MARGIN_OPTIONS.map((option) => <option key={option.label} value={option.value ?? "auto"}>{option.label}</option>)}</select></label>
+                <label>Tail after last sell<select value={settings.chartTrailSeconds ?? "auto"} onChange={(event) => void changeChartTiming("chartTrailSeconds", event.target.value === "auto" ? null : Number(event.target.value))}>{VIDEO_MARGIN_OPTIONS.map((option) => <option key={option.label} value={option.value ?? "auto"}>{option.label}</option>)}</select></label>
                 <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
                 <div className="field-group"><span>Market-cap labels</span><Segmented value={settings.marketCapFormat} options={[{ value: "auto", label: "Auto K/M" }, { value: "thousands", label: "Force K" }, { value: "millions", label: "Force M" }]} onChange={(value) => patchSettings("marketCapFormat", value)} /></div>
                 <label>Auto K→M threshold<input type="number" min={1_000} max={1_000_000_000} step={100_000} value={settings.marketCapThreshold} onChange={(event) => patchSettings("marketCapThreshold", Math.max(1_000, Number(event.target.value) || 1_000_000))} /></label>

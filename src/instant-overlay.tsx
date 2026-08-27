@@ -51,12 +51,18 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
     const audio = audioRef.current;
     if (!audio || audio.state !== "running") return;
     for (const fill of replaySoundEvents(spec)) {
-      const eventProgress = replayEventOffset(fill, spec, { duration: settings.duration, width: previewWidth, height: previewHeight }) / settings.duration;
+      const eventProgress = replayEventOffset(fill, spec, {
+        duration: settings.duration,
+        width: previewWidth,
+        height: previewHeight,
+        chartLeadSeconds: settings.chartLeadSeconds,
+        chartTrailSeconds: settings.chartTrailSeconds,
+      }) / settings.duration;
       if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
       soundedEventsRef.current.add(fill.signature);
       void playReplaySound(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
     }
-  }, [settings.buySound, settings.duration, settings.sellSound, spec]);
+  }, [previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, spec]);
 
   const draw = useCallback((next: number) => {
     const canvas = canvasRef.current;
@@ -70,6 +76,9 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
       exactValues: settings.exactValues,
       walletVisibility: settings.walletVisibility,
       chartMetric: settings.chartMetric,
+      chartAnimation: settings.chartAnimation,
+      chartLeadSeconds: settings.chartLeadSeconds,
+      chartTrailSeconds: settings.chartTrailSeconds,
       marketCapFormat: settings.marketCapFormat,
       marketCapThreshold: settings.marketCapThreshold,
       width: canvas.width,
@@ -162,7 +171,10 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const [error, setError] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
 
-  const buildCapturedReplay = useCallback(async (candleInterval: CandleIntervalPreference = "auto") => {
+  const buildCapturedReplay = useCallback(async (
+    candleInterval: CandleIntervalPreference = "auto",
+    timelineOptions?: { duration: number; leadSeconds: number | null; trailSeconds: number | null },
+  ) => {
     const request = replayRequestRef.current.begin();
     setError("");
     setView("booting");
@@ -207,7 +219,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         throw new Error("No replayable buys or sells were found across the detected Axiom wallet(s).");
       }
       setStatus(`Building from ${episode.fills.length} Axiom execution${episode.fills.length === 1 ? "" : "s"}…`);
-      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal);
+      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal, timelineOptions);
       if (!replayRequestRef.current.isLatest(request.id) || context.pairAddress !== enrichedContext.pairAddress) return;
       setSpec(nextSpec);
       await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
@@ -232,7 +244,11 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
           aspectRatio: savedSettings.aspectRatio ?? "16:9",
         });
-        void buildCapturedReplay(savedSettings.candleInterval ?? "auto");
+        void buildCapturedReplay(savedSettings.candleInterval ?? "auto", {
+          duration: savedSettings.duration,
+          leadSeconds: savedSettings.chartLeadSeconds,
+          trailSeconds: savedSettings.chartTrailSeconds,
+        });
       })
       .catch(() => {
         if (!active) return;
@@ -252,6 +268,33 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     setSettings((current) => ({ ...current, [key]: value }));
   };
 
+  const changeDuration = async (duration: number) => {
+    const effectiveLead = settings.chartLeadSeconds ?? 0.12;
+    const effectiveTrail = settings.chartTrailSeconds ?? 0.65;
+    if (effectiveLead + effectiveTrail > duration - 0.25) {
+      setError("This duration is too short for the selected chart lead-in and tail.");
+      return;
+    }
+    if (spec && replayContext && (settings.chartLeadSeconds != null || settings.chartTrailSeconds != null)) {
+      const request = replayRequestRef.current.begin();
+      try {
+        const nextSpec = await createReplaySpec(spec.episode, replayContext, spec.walletAddress, settings.candleInterval, request.signal, {
+          duration,
+          leadSeconds: settings.chartLeadSeconds,
+          trailSeconds: settings.chartTrailSeconds,
+        });
+        if (!replayRequestRef.current.isLatest(request.id)) return;
+        setSpec(nextSpec);
+        await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
+      } catch (caught) {
+        if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
+        setError(caught instanceof Error ? caught.message : "Could not refresh the replay timeline.");
+        return;
+      }
+    }
+    patch("duration", duration);
+  };
+
   const exportVideo = async () => {
     if (!spec) return;
     setExportProgress(0);
@@ -265,6 +308,9 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
+        chartAnimation: settings.chartAnimation,
+        chartLeadSeconds: settings.chartLeadSeconds,
+        chartTrailSeconds: settings.chartTrailSeconds,
         marketCapFormat: settings.marketCapFormat,
         marketCapThreshold: settings.marketCapThreshold,
         width: settings.aspectRatio === "9:16" ? 1080 : 1920,
@@ -312,7 +358,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
           <section className="wick-controls">
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
+            <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value)} /></div>
             <div className="wick-control-section">
   <div className="wick-section-title">

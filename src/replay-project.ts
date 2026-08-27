@@ -7,6 +7,7 @@ import {
   intervalSeconds,
   selectAxiomInterval,
   type CandleIntervalPreference,
+  type CandleTimeWindow,
 } from "./axiom-candles";
 
 export type { CandleIntervalPreference } from "./axiom-candles";
@@ -30,6 +31,29 @@ interface MarketHistory {
   points: ReplayPoint[];
   interval: number;
   source: "axiom" | "gecko";
+}
+
+export interface ReplayTimelineOptions {
+  duration: number;
+  leadSeconds: number | null;
+  trailSeconds: number | null;
+}
+
+export function calculateReplayTimeWindow(
+  episode: TradeEpisode,
+  options?: ReplayTimelineOptions,
+): CandleTimeWindow | undefined {
+  if (!options || (options.leadSeconds == null && options.trailSeconds == null)) return undefined;
+  const duration = Math.max(1, options.duration);
+  const lead = Math.max(0, options.leadSeconds ?? 0.12);
+  const trail = Math.max(0, options.trailSeconds ?? 0.65);
+  const activeVideoSeconds = duration - lead - trail;
+  if (activeVideoSeconds < 0.25) throw new Error("Chart lead-in and tail must leave at least 0.25 seconds for the trade replay.");
+  const tradeSpan = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  return {
+    fromSeconds: Math.max(0, episode.startTimestamp - tradeSpan * lead / activeVideoSeconds),
+    toSeconds: episode.endTimestamp + tradeSpan * trail / activeVideoSeconds,
+  };
 }
 
 const LAMPORTS = new Decimal(1_000_000_000);
@@ -184,12 +208,15 @@ async function getMarketHistory(
   episode: TradeEpisode,
   candleInterval: CandleIntervalPreference,
   signal?: AbortSignal,
+  timeWindow?: CandleTimeWindow,
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
-  const spanSeconds = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  const windowStart = timeWindow?.fromSeconds ?? episode.startTimestamp;
+  const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp;
+  const spanSeconds = Math.max(1, windowEnd - windowStart);
   if (episode.fills.some((fill) => fill.source === "axiom")) {
     try {
-      const axiom = await fetchAxiomCandles(context, episode, candleInterval, { signal });
+      const axiom = await fetchAxiomCandles(context, episode, candleInterval, { signal }, timeWindow);
       if (axiom) {
         return {
           ...axiom,
@@ -211,7 +238,7 @@ async function getMarketHistory(
     return true;
   }).slice(0, 3);
   for (const request of requests) {
-    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request, signal);
+    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request, signal, timeWindow);
     if (result) return result;
   }
   return null;
@@ -223,8 +250,11 @@ async function getMarketHistoryAtInterval(
   spanSeconds: number,
   request: CandleRequest,
   signal?: AbortSignal,
+  timeWindow?: CandleTimeWindow,
 ): Promise<MarketHistory | null> {
-  const before = episode.endTimestamp + request.interval * 2;
+  const windowStart = timeWindow?.fromSeconds ?? episode.startTimestamp - request.interval;
+  const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp + request.interval;
+  const before = windowEnd + request.interval;
   const limit = Math.min(1_000, Math.max(24, Math.ceil(spanSeconds / request.sourceInterval) + 4));
   const params = new URLSearchParams({
     aggregate: String(request.aggregate),
@@ -243,7 +273,7 @@ async function getMarketHistoryAtInterval(
     const payload = response.payload as OhlcvPayload;
     const sourceCandles = (payload.data?.attributes?.ohlcv_list ?? [])
       .filter(isFiniteCandle)
-      .filter(([timestamp]) => timestamp >= episode.startTimestamp - request.interval && timestamp <= episode.endTimestamp + request.interval)
+      .filter(([timestamp]) => timestamp >= windowStart && timestamp <= windowEnd)
       .map(([timestamp, open, high, low, close, volume]): ReplayCandle => ({
         timestamp: Number(timestamp),
         openSol: String(open),
@@ -270,13 +300,15 @@ export async function createReplaySpec(
   walletAddress: string,
   candleInterval: CandleIntervalPreference = "auto",
   signal?: AbortSignal,
+  timelineOptions?: ReplayTimelineOptions,
 ): Promise<ReplaySpec> {
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
   const fillPoints = buildReplayPoints(episode);
   const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
+  const timeWindow = calculateReplayTimeWindow(episode, timelineOptions);
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(signal),
-    getMarketHistory(context, episode, candleInterval, signal),
+    getMarketHistory(context, episode, candleInterval, signal, timeWindow),
     getMarketCapMultiplier(context, signal),
   ]);
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
@@ -296,6 +328,8 @@ export async function createReplaySpec(
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,
     marketDataSource: marketHistory?.source ?? "fills",
     candleIntervalSeconds: marketHistory?.interval,
+    chartStartTimestamp: timeWindow?.fromSeconds,
+    chartEndTimestamp: timeWindow?.toSeconds,
     tradeDataSource,
   };
 }

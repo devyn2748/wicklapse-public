@@ -45,7 +45,8 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 - Axiom `pair-chart-v3` candles with native dynamic intervals, GeckoTerminal fallback, and execution-path fallback
 - Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels, plus an Advanced threshold and overrides for forced K, forced M, or raw token price
 - Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
-- Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
+- Advanced chart motion modes: progressive auto-fit (default), rolling follow, and a fixed full-timeline camera
+- Optional video-timeline lead/tail placement backed by real market history—for example, first buy at 3s and final sell at 7s in a 10s clip
 - Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
 - Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade
 - Sparse-market OHLC recovery with empty-interval fills and progressively coarser provider-supported retries

@@ -75,6 +75,19 @@ describe("Axiom candle interval selection", () => {
     expect(url.searchParams.get("interval")).toBe("5s");
     expect(Number(url.searchParams.get("countBars"))).toBeGreaterThan(120);
   });
+
+  it("uses an explicit video-derived market window when provided", () => {
+    const requestedEpisode = episode(600);
+    const fromSeconds = requestedEpisode.startTimestamp - 450;
+    const toSeconds = requestedEpisode.endTimestamp + 450;
+    const request = buildAxiomCandleRequest(context, requestedEpisode, "auto", { fromSeconds, toSeconds })!;
+    const url = new URL(request.url);
+    expect(request.fromSeconds).toBe(fromSeconds);
+    expect(request.toSeconds).toBe(toSeconds);
+    expect(url.searchParams.get("from")).toBe(String(fromSeconds * 1_000));
+    expect(url.searchParams.get("to")).toBe(String(toSeconds * 1_000));
+    expect(Number(url.searchParams.get("countBars"))).toBeGreaterThanOrEqual(150);
+  });
 });
 
 describe("Axiom candle parsing", () => {
