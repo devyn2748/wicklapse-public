@@ -32,10 +32,6 @@ async function fetchPublicMarketJson(message: {
   }
 }
 
-async function openStudio(): Promise<void> {
-  await browser.tabs.create({ url: browser.runtime.getURL("/studio.html?mode=advanced") });
-}
-
 async function openInstantOnAxiom(tab: Browser.tabs.Tab): Promise<boolean> {
   if (!tab.id || !tab.url) return false;
   const url = new URL(tab.url);
@@ -136,11 +132,16 @@ export default defineBackground(() => {
       void openInstantOnAxiom(tab);
       return;
     }
-    void openStudio();
+    void browser.tabs.query({ url: ["https://axiom.trade/meme/*", "https://*.axiom.trade/meme/*"] }).then(async (tabs) => {
+      const axiomTab = tabs.find((candidate) => candidate.id && candidate.url);
+      if (!axiomTab?.id) return;
+      await browser.tabs.update(axiomTab.id, { active: true });
+      if (axiomTab.windowId) await browser.windows.update(axiomTab.windowId, { focused: true });
+      await openInstantOnAxiom(axiomTab);
+    }).catch(() => undefined);
   });
   browser.runtime.onMessage.addListener((message: unknown) => {
     if (!message || typeof message !== "object" || !("type" in message)) return undefined;
-    if (message.type === "OPEN_ADVANCED_STUDIO") return openStudio().then(() => ({ ok: true }));
     if (message.type === "WICKLAPSE_REFRESH_AXIOM_TRADE") {
       const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
       return refreshAxiomTrade(pairAddress);

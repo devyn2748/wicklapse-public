@@ -232,7 +232,7 @@ async function retrieveCurrentTradeContext(): Promise<ShareContext> {
   }
   const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
   if (!walletAddresses.length) {
-    throw new Error("Axiom did not expose any Solana trading wallets. Add a public wallet in Advanced as a fallback.");
+    throw new Error("Axiom did not expose any Solana trading wallets. Confirm a public trading wallet is active in Axiom, then try again.");
   }
   if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
   const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
@@ -333,10 +333,6 @@ export default defineContentScript({
       overlayRoot?.render(React.createElement(InstantOverlay, {
         context,
         onClose: closeOverlay,
-        onOpenAdvanced: () => {
-          void browser.runtime.sendMessage({ type: "OPEN_ADVANCED_STUDIO" });
-          closeOverlay();
-        },
       }));
     };
 

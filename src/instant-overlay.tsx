@@ -6,7 +6,7 @@ import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
-import { drawReplayFrame, type BackgroundStyle, type RenderConfig, type ThemeName } from "./renderer";
+import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName } from "./renderer";
 import {
   loadStudioSettings,
   loadTradingWalletAddresses,
@@ -23,7 +23,6 @@ const WICKLAPSE_VERSION = browser.runtime.getManifest().version;
 interface InstantOverlayProps {
   context: ShareContext;
   onClose: () => void;
-  onOpenAdvanced: () => void;
 }
 
 type View = "booting" | "instant" | "error";
@@ -161,7 +160,7 @@ function Segmented<T extends string | number>({
   ))}</div>;
 }
 
-export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOverlayProps): JSX.Element {
+export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.Element {
   const [view, setView] = useState<View>("booting");
   const [spec, setSpec] = useState<ReplaySpec | null>(null);
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
@@ -170,6 +169,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   const [status, setStatus] = useState("Preparing Wicklapse…");
   const [error, setError] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const buildCapturedReplay = useCallback(async (
     candleInterval: CandleIntervalPreference = "auto",
@@ -193,7 +193,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
       }
       const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
       if (!walletAddresses.length) {
-        throw new Error("Axiom did not expose any Solana trading wallets. Add a public wallet in Advanced as a fallback.");
+        throw new Error("Axiom did not expose any Solana trading wallets. Confirm a public trading wallet is active in Axiom, then try again.");
       }
       if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
       setStatus(`Retrieving executions across ${walletAddresses.length} Axiom wallet${walletAddresses.length === 1 ? "" : "s"}…`);
@@ -269,11 +269,12 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
   };
 
   const changeDuration = async (duration: number) => {
+    setError("");
     const effectiveLead = settings.chartLeadSeconds ?? 0.12;
     const effectiveTrail = settings.chartTrailSeconds ?? 0.65;
     if (effectiveLead + effectiveTrail > duration - 0.25) {
       setError("This duration is too short for the selected chart lead-in and tail.");
-      return;
+      return false;
     }
     if (spec && replayContext && (settings.chartLeadSeconds != null || settings.chartTrailSeconds != null)) {
       const request = replayRequestRef.current.begin();
@@ -283,16 +284,48 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           leadSeconds: settings.chartLeadSeconds,
           trailSeconds: settings.chartTrailSeconds,
         });
-        if (!replayRequestRef.current.isLatest(request.id)) return;
+        if (!replayRequestRef.current.isLatest(request.id)) return false;
         setSpec(nextSpec);
         await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
       } catch (caught) {
-        if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
+        if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return false;
         setError(caught instanceof Error ? caught.message : "Could not refresh the replay timeline.");
-        return;
+        return false;
       }
     }
     patch("duration", duration);
+    return true;
+  };
+
+  const changeChartTiming = async (key: "chartLeadSeconds" | "chartTrailSeconds", value: number | null) => {
+    setError("");
+    const leadSeconds = key === "chartLeadSeconds" ? value : settings.chartLeadSeconds;
+    const trailSeconds = key === "chartTrailSeconds" ? value : settings.chartTrailSeconds;
+    const effectiveLead = leadSeconds ?? 0.12;
+    const effectiveTrail = trailSeconds ?? 0.65;
+    if (effectiveLead + effectiveTrail > settings.duration - 0.25) {
+      setError("First-buy timing and post-sell padding must leave at least 0.25 seconds for the trade.");
+      return false;
+    }
+    if (spec && replayContext) {
+      const request = replayRequestRef.current.begin();
+      try {
+        const nextSpec = await createReplaySpec(spec.episode, replayContext, spec.walletAddress, settings.candleInterval, request.signal, {
+          duration: settings.duration,
+          leadSeconds,
+          trailSeconds,
+        });
+        if (!replayRequestRef.current.isLatest(request.id)) return false;
+        setSpec(nextSpec);
+        await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
+      } catch (caught) {
+        if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return false;
+        setError(caught instanceof Error ? caught.message : "Could not refresh the replay timeline.");
+        return false;
+      }
+    }
+    patch(key, value);
+    return true;
   };
 
   const exportVideo = async () => {
@@ -337,23 +370,34 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
 
   return (
     <div className="wick-backdrop" role="dialog" aria-modal="false" aria-label="Wicklapse Instant">
+      <div className={`wick-workspace${expanded && view === "instant" ? " is-expanded" : ""}`}>
+      {expanded && view === "instant" && spec && <aside className="wick-side-panel" aria-label="Expanded replay controls">
+        <div className="wick-side-header"><div><span>EXPANDED CONTROLS</span><strong>Replay controls</strong></div><button type="button" aria-label="Collapse controls" onClick={() => setExpanded(false)}>→</button></div>
+        <div className="wick-side-content">
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Progressive</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Currency</h3><span>{settings.currency}</span></div><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s clip</span></div>
+            <label>First buy at<input key={`instant-lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto · 0.12s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value).then((changed) => { if (!changed) input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }); else input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
+            <label>Chart after final sell<input key={`instant-trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto · 0.65s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value).then((changed) => { if (!changed) input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }); else input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
+            <small>Values are positions within the exported video. Clear either field to return it to Auto.</small>
+          </section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Custom clip length</h3><span>1–60 seconds</span></div><label>Video duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label></section>
+        </div>
+        <div className="wick-side-footer">Changes restart the preview automatically.</div>
+      </aside>}
       <section className={`wick-modal wick-${view}`}>
         <header className="wick-header">
           <div className="wick-brand"><img src={logoUrl} alt="Wicklapse Logo" /><strong>WICKLAPSE</strong>{view === "instant" && <span>INSTANT EXPORT</span>}</div>
           {spec && <div className="wick-trade">${spec.symbol} <b>{spec.episode.matchLabel} · {spec.episode.matchScore}%</b></div>}
           <div className="wick-header-actions">
-            {view === "instant" && <button type="button" className="wick-advanced" onClick={async () => {
-              if (spec) await saveProject({ shareContext: replayContext ?? context, replaySpec: spec, selectedEpisodeId: spec.episode.id });
-              await saveStudioSettings(settings);
-              onOpenAdvanced();
-            }}>Open Advanced Workstation →</button>}
+            {view === "instant" && <button type="button" className={`wick-advanced${expanded ? " is-selected" : ""}`} aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>{expanded ? "Collapse controls →" : "Expand controls ←"}</button>}
             <button type="button" className="wick-close" aria-label="Close Wicklapse" onClick={onClose}>×</button>
           </div>
         </header>
 
         {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>Axiom trade capture and rendering remain on this device.</p></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Open Advanced</button></div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Try again</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
@@ -387,8 +431,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     <option value="particles">Particles</option>
   </select>
 </div>
-            <div className="wick-control-grid">
-              <div className="wick-control-section"><h3>Currency</h3><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></div>
+            <div className="wick-control-grid wick-audio-grid">
               <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>
               <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>
             </div>
@@ -396,12 +439,13 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
               {error && <div className="wick-error">{error}</div>}
               {exportProgress !== null && <div className="wick-export-progress"><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b><progress max={1} value={exportProgress} /></div>}
               <button type="button" className="wick-primary wick-export" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "Download"}</button>
-              <div className="wick-bottom-actions"><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Verify on-chain in Advanced</button><button type="button" className="wick-secondary" onClick={onOpenAdvanced}>Customize in Advanced →</button></div>
+              <div className="wick-bottom-actions"><button type="button" className="wick-secondary" onClick={() => setExpanded(true)}>Replay controls</button><button type="button" className="wick-secondary" onClick={() => setExpanded(true)}>Customize →</button></div>
             </div>
           </section>
         </main>}
         <footer className="wick-footer"><span>♢ {spec?.verified ? "On-chain verified" : spec ? "Captured from Axiom · local-first" : "Local-first · private by default"}</span><b>v{WICKLAPSE_VERSION} · Rendered client-side</b></footer>
       </section>
+      </div>
     </div>
   );
 }
