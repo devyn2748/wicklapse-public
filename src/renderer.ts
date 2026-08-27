@@ -26,6 +26,7 @@ export interface RenderConfig {
   showAverageBuyLine?: boolean;
   showAverageSellLine?: boolean;
   showAthLine?: boolean;
+  affiliateLink?: string;
 }
 
 const THEMES = {
@@ -904,6 +905,12 @@ function drawLandscapeReplayFrame(
     );
   }
   context.textAlign = "left";
+  if (config.affiliateLink) {
+    drawPill(context, config.affiliateLink, margin, height - 90 * unit, {
+      fill: `${theme.text}1a`, stroke: `${theme.text}55`, color: theme.text,
+      fontSize: 26 * unit, paddingX: 25 * unit,
+    });
+  }
   drawWalletDisclosure(context, spec, config, theme, margin, height - 30 * unit, width - margin * 2, 22 * unit);
   context.restore();
 }
@@ -1247,6 +1254,14 @@ function drawPortraitReplayFrame(
     );
   }
   context.textAlign = "left";
+  if (config.affiliateLink) {
+    context.font = `bold ${32 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    const affiliateWidth = context.measureText(config.affiliateLink).width + 60 * unit;
+    drawPill(context, config.affiliateLink, width / 2 - affiliateWidth / 2, height - 100 * unit, {
+      fill: `${theme.text}1a`, stroke: `${theme.text}55`, color: theme.text,
+      fontSize: 32 * unit, paddingX: 30 * unit,
+    });
+  }
   drawWalletDisclosure(context, spec, config, theme, margin, height - 16 * unit, width - margin * 2, 20 * unit);
   context.restore();
 }

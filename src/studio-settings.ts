@@ -30,6 +30,7 @@ export interface StudioSettings {
   showAverageBuyLine: boolean;
   showAverageSellLine: boolean;
   showAthLine: boolean;
+  affiliateLink: string;
 }
 
 const soundNames = new Set<string>([
@@ -60,6 +61,7 @@ export const StudioSettingsSchema = z.object({
   showAverageBuyLine: z.boolean(),
   showAverageSellLine: z.boolean(),
   showAthLine: z.boolean(),
+  affiliateLink: z.string(),
 });
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -85,6 +87,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   showAverageBuyLine: false,
   showAverageSellLine: false,
   showAthLine: false,
+  affiliateLink: "",
 };
 
 export const ASPECT_PRESETS = [
