@@ -6,6 +6,7 @@ import type { ChartAnimation, ThemeName, WalletVisibility } from "./renderer";
 
 export type CardAspectRatio = "16:9" | "9:16";
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles";
+export type ChartStyle = "candlestick" | "line" | "area" | "bar";
 
 export interface StudioSettings {
   duration: number;
@@ -25,6 +26,7 @@ export interface StudioSettings {
   aspectRatio: CardAspectRatio;
   backgroundStyle: BackgroundStyle;
   chartAnimation: ChartAnimation;
+  chartStyle: ChartStyle;
   chartLeadSeconds: number | null;
   chartTrailSeconds: number | null;
   showAverageBuyLine: boolean;
@@ -57,6 +59,7 @@ export const StudioSettingsSchema = z.object({
   aspectRatio: z.enum(["16:9", "9:16"]),
   backgroundStyle: z.enum(["glow", "solid", "grid", "particles"]),
   chartAnimation: z.enum(["progressive", "follow", "fixed"]),
+  chartStyle: z.enum(["candlestick", "line", "area", "bar"]),
   chartLeadSeconds: z.number().finite().min(0).max(60).nullable(),
   chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
   showAverageBuyLine: z.boolean(),
@@ -84,6 +87,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   aspectRatio: "16:9",
   backgroundStyle: "glow",
   chartAnimation: "progressive",
+  chartStyle: "candlestick",
   chartLeadSeconds: null,
   chartTrailSeconds: null,
   showAverageBuyLine: false,

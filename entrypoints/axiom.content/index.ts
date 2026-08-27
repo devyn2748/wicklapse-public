@@ -279,6 +279,7 @@ function makeEntryButton(onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.wicklapseEntry = "true";
+  button.dataset.html2canvasIgnore = "true";
   button.textContent = "✦  Create Trade Replay with Wicklapse";
   Object.assign(button.style, {
     width: "calc(100% - 28px)",
@@ -337,6 +338,7 @@ export default defineContentScript({
       if (!overlayHost) {
         overlayHost = document.createElement("div");
         overlayHost.dataset.wicklapseOverlay = "true";
+        overlayHost.dataset.html2canvasIgnore = "true";
         document.documentElement.append(overlayHost);
         const shadow = overlayHost.attachShadow({ mode: "open" });
         const style = document.createElement("style");
