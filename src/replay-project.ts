@@ -113,9 +113,10 @@ function isFiniteCandle(row: unknown): row is [number, number, number, number, n
 }
 
 export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCandle[]): ReplayPoint[] {
+  const fills = [...episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot || left.signature.localeCompare(right.signature));
   const timeline = [
     ...candles.map((candle) => ({ timestamp: candle.timestamp, priceSol: candle.closeSol, order: 0 })),
-    ...episode.fills.map((fill) => ({ timestamp: fill.timestamp, priceSol: fill.estimatedPriceSol, order: 1 })),
+    ...fills.map((fill) => ({ timestamp: fill.timestamp, priceSol: fill.estimatedPriceSol, order: 1 })),
   ].sort((left, right) => left.timestamp - right.timestamp || left.order - right.order);
   let fillIndex = 0;
   let cashFlow = new Decimal(0);
@@ -123,8 +124,8 @@ export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCa
   let fees = new Decimal(0);
   const points: ReplayPoint[] = [];
   for (const item of timeline) {
-    while (fillIndex < episode.fills.length && episode.fills[fillIndex]!.timestamp <= item.timestamp) {
-      const fill = episode.fills[fillIndex]!;
+    while (fillIndex < fills.length && fills[fillIndex]!.timestamp <= item.timestamp) {
+      const fill = fills[fillIndex]!;
       const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
       const amount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
       if (fill.side === "buy") {

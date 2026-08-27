@@ -64,4 +64,13 @@ describe("buildTradeEpisodes", () => {
     expect(episode?.matchLabel).toBe("Exact match");
     expect(episode?.matchScore).toBeGreaterThanOrEqual(90);
   });
+
+  it("sorts unsorted fills before splitting lifecycles", () => {
+    const buy = fill({ signature: "buy", timestamp: 100, side: "buy", walletPostTokenRaw: "1000000" });
+    const sell = fill({ signature: "sell", timestamp: 200, side: "sell", walletPostTokenRaw: "0" });
+    const rebuy = fill({ signature: "rebuy", timestamp: 300, side: "buy", walletPostTokenRaw: "1000000" });
+    const episodes = buildTradeEpisodes([rebuy, sell, buy], context);
+    expect(episodes).toHaveLength(2);
+    expect(episodes.flatMap((episode) => episode.fills).map((item) => item.timestamp).sort()).toEqual([100, 200, 300]);
+  });
 });

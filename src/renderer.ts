@@ -123,15 +123,9 @@ const THEMES = {
 } as const;
 
 type Theme = (typeof THEMES)[ThemeName];
-type Coordinate = { x: number; y: number; at: number };
 
 function clamp(value: number, minimum = 0, maximum = 1): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-function easeOut(value: number): number {
-  const x = clamp(value);
-  return 1 - (1 - x) ** 3;
 }
 
 function easeInOut(value: number): number {
@@ -204,16 +198,36 @@ function currencyValue(sol: Decimal, spec: ReplaySpec, currency: Currency): Deci
   return spec.usdPerSol ? sol.mul(spec.usdPerSol) : new Decimal(0);
 }
 
-function walletLabel(address: string, visibility: WalletVisibility): string {
-  if (visibility === "hidden" || !address) return "TRADER PRIVATE";
-  if (visibility === "short") return `${address.slice(0, 5)}…${address.slice(-5)}`;
-  return address;
+function walletDisclosure(spec: ReplaySpec, visibility: WalletVisibility): string {
+  if (visibility === "hidden") return "TRADER PRIVATE";
+  const addresses = [...new Set([...(spec.walletAddresses ?? []), spec.walletAddress].filter(Boolean))];
+  if (!addresses.length) return "WALLET UNAVAILABLE";
+  const visible = visibility === "short"
+    ? addresses.map((address) => `${address.slice(0, 5)}…${address.slice(-5)}`)
+    : addresses;
+  return `${addresses.length > 1 ? "WALLETS" : "WALLET"} ${visible.join(" · ")}`;
 }
 
-function pointProgress(point: ReplayPoint, spec: ReplaySpec): number {
-  const start = spec.episode.startTimestamp;
-  const span = Math.max(1, spec.episode.endTimestamp - start);
-  return clamp((point.timestamp - start) / span);
+function drawWalletDisclosure(
+  context: CanvasRenderingContext2D,
+  spec: ReplaySpec,
+  config: RenderConfig,
+  theme: Theme,
+  x: number,
+  y: number,
+  maximumWidth: number,
+  preferredFontSize: number,
+): void {
+  const text = walletDisclosure(spec, config.walletVisibility);
+  let fontSize = preferredFontSize;
+  do {
+    context.font = `bold ${fontSize}px ui-monospace, SFMono-Regular, monospace`;
+    if (context.measureText(text).width <= maximumWidth) break;
+    fontSize -= 1;
+  } while (fontSize > Math.max(10, preferredFontSize * 0.5));
+  context.fillStyle = theme.muted;
+  context.textAlign = "left";
+  context.fillText(text, x, y, maximumWidth);
 }
 
 function eventProgress(fill: TradeFill, spec: ReplaySpec): number {
@@ -258,10 +272,6 @@ function replayCandleInterval(spec: ReplaySpec): number {
   return Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
 }
 
-function hasMarketCandles(spec: ReplaySpec): boolean {
-  return Boolean(spec.candles?.length) && spec.marketDataSource !== "fills";
-}
-
 /** Returns the video progress where the renderer first reveals an execution marker. */
 export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, width: number, height: number, duration: number): number {
   const landscape = width / height >= 1.45;
@@ -279,11 +289,6 @@ export function replayEventVisualProgress(fill: TradeFill, spec: ReplaySpec, wid
   );
   const reveal = clamp((fill.timestamp - chartStart) / Math.max(1, chartEnd - chartStart));
   return window.start + inverseReplayEase(reveal) * (window.end - window.start);
-}
-
-function interpolateReplay(points: ReplayPoint[], spec: ReplaySpec, timeline: number): { price: number; pnl: Decimal } {
-  const timestamp = spec.episode.startTimestamp + timeline * Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp);
-  return interpolateReplayAtTimestamp(points, timestamp);
 }
 
 function interpolateReplayAtTimestamp(points: ReplayPoint[], timestamp: number): { price: number; pnl: Decimal } {
@@ -325,81 +330,6 @@ function drawPill(
   return width;
 }
 
-function traceSmoothPath(context: CanvasRenderingContext2D, points: Coordinate[]): void {
-  if (!points.length) return;
-  context.moveTo(points[0]!.x, points[0]!.y);
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!;
-    const point = points[index]!;
-    const midpointX = (previous.x + point.x) / 2;
-    context.bezierCurveTo(midpointX, previous.y, midpointX, point.y, point.x, point.y);
-  }
-}
-
-
-function drawCandleArcLogo(context: CanvasRenderingContext2D, x: number, y: number, size: number, glow: boolean) {
-  const scale = size / 400;
-  context.save();
-  context.translate(x, y);
-  context.scale(scale, scale);
-
-  if (glow) {
-    context.shadowColor = "#00FFA3";
-    context.shadowBlur = 24;
-  }
-
-  const greenLine = (x1: number, y1: number, x2: number, y2: number) => {
-    context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2);
-    context.strokeStyle = "#00FFA3"; context.lineWidth = 2.5; context.lineCap = "round"; context.stroke();
-  };
-  const greenRect = (rx: number, ry: number, rw: number, rh: number, radius: number) => {
-    roundedRect(context, rx, ry, rw, rh, radius);
-    context.fillStyle = theme.positive; context.fill();
-  };
-  const whiteLine = (x1: number, y1: number, x2: number, y2: number, opacity: number) => {
-    context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2);
-    context.strokeStyle = `rgba(255, 255, 255, ${opacity})`; context.lineWidth = 1.8; context.lineCap = "round"; context.stroke();
-  };
-  const whiteRect = (rx: number, ry: number, rw: number, rh: number, radius: number, fillOp: number, strokeOp: number) => {
-    roundedRect(context, rx, ry, rw, rh, radius);
-    context.fillStyle = `rgba(255, 255, 255, ${fillOp})`; context.fill();
-    context.strokeStyle = `rgba(255, 255, 255, ${strokeOp})`; context.lineWidth = 1; context.stroke();
-  };
-
-  greenLine(38, 160, 38, 215); greenRect(31, 174, 14, 24, 2);
-  whiteLine(60, 178, 60, 232, 0.4); whiteRect(53, 190, 14, 22, 2, 0.18, 0.5);
-  whiteLine(84, 202, 84, 265, 0.3); whiteRect(77, 218, 14, 28, 2, 0.12, 0.4);
-  greenLine(108, 216, 108, 292); greenRect(101, 232, 14, 42, 2.5);
-  whiteLine(130, 234, 130, 308, 0.35); whiteRect(123, 248, 14, 36, 2, 0.15, 0.4);
-  whiteLine(152, 256, 152, 318, 0.3); whiteRect(145, 278, 14, 26, 2, 0.12, 0.35);
-  greenLine(174, 264, 174, 310); greenRect(167, 275, 14, 20, 2);
-
-  greenLine(194, 226, 194, 295); greenRect(187, 240, 14, 40, 2.5);
-  greenLine(216, 202, 216, 252); greenRect(209, 214, 14, 24, 2);
-  whiteLine(238, 212, 238, 260, 0.35); whiteRect(231, 222, 14, 22, 2, 0.15, 0.4);
-  whiteLine(256, 234, 256, 290, 0.3); whiteRect(249, 245, 14, 26, 2, 0.12, 0.35);
-
-  whiteLine(274, 248, 274, 330, 0.3); whiteRect(267, 270, 14, 42, 2, 0.12, 0.35);
-  greenLine(294, 256, 294, 320); greenRect(287, 268, 14, 38, 2);
-  greenLine(314, 215, 314, 294); greenRect(307, 234, 14, 44, 2.5);
-  greenLine(334, 192, 334, 264); greenRect(327, 206, 14, 46, 2.5);
-  whiteLine(354, 152, 354, 218, 0.35); whiteRect(347, 166, 14, 34, 2, 0.15, 0.4);
-  greenLine(374, 114, 374, 192); greenRect(367, 128, 14, 50, 3);
-  greenLine(394, 78, 394, 160); greenRect(387, 98, 15, 45, 3);
-
-  context.save();
-  context.translate(204, 288);
-  context.beginPath(); context.moveTo(-18, -20); context.bezierCurveTo(-18, -24, -14, -26, -10, -24); context.lineTo(18, -8); context.bezierCurveTo(22, -6, 22, -2, 18, 0); context.lineTo(-10, 16); context.bezierCurveTo(-14, 18, -18, 16, -18, 12); context.closePath();
-  context.fillStyle = "rgba(255, 255, 255, 0.06)"; context.fill();
-  context.strokeStyle = "rgba(255, 255, 255, 0.4)"; context.lineWidth = 1.5; context.stroke();
-
-  context.beginPath(); context.moveTo(-9, -10); context.bezierCurveTo(-9, -12, -7, -13, -5, -12); context.lineTo(9, -4); context.bezierCurveTo(11, -3, 11, -1, 9, 0); context.lineTo(-5, 8); context.bezierCurveTo(-7, 9, -9, 8, -9, 6); context.closePath();
-  context.fillStyle = theme.positive; context.fill();
-  context.restore();
-
-  context.restore();
-}
-
 function drawSolanaGlyph(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, fill: string) {
   context.save();
   context.translate(x, y);
@@ -420,7 +350,7 @@ function drawBackground(
   height: number,
   theme: Theme,
   config: RenderConfig,
-  progress: number,
+  _progress: number,
 ): void {
   const unit = Math.min(width, height) / 1080;
   const isLandscape = width / height >= 1.45;
@@ -733,7 +663,7 @@ function drawLandscapeReplayFrame(
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
-  for (const fill of spec.episode.fills) {
+  for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
     const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
     const price = new Decimal(fill.estimatedPriceSol || 0);
     const previous = markers.at(-1);
@@ -824,6 +754,7 @@ function drawLandscapeReplayFrame(
     );
   }
   context.textAlign = "left";
+  drawWalletDisclosure(context, spec, config, theme, margin, height - 30 * unit, width - margin * 2, 22 * unit);
   context.restore();
 }
 
@@ -1070,7 +1001,7 @@ function drawPortraitReplayFrame(
 
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
-  for (const fill of spec.episode.fills) {
+  for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
     const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
     const price = new Decimal(fill.estimatedPriceSol || 0);
     const previous = markers.at(-1);
@@ -1161,6 +1092,7 @@ function drawPortraitReplayFrame(
     );
   }
   context.textAlign = "left";
+  drawWalletDisclosure(context, spec, config, theme, margin, height - 16 * unit, width - margin * 2, 20 * unit);
   context.restore();
 }
 

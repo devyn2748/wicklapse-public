@@ -152,9 +152,12 @@ export function replaySoundEvents(spec: ReplaySpec): TradeFill[] {
   const fills = [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp);
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
   const middle = Math.floor(candles.length / 2);
-  const interval = candles.length > 1
-    ? Math.max(1, candles[middle]!.timestamp - candles[middle - 1]!.timestamp)
-    : Math.max(1, Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60));
+  const inferredLegacyInterval = candles.length > 1
+    ? candles[middle]!.timestamp - candles[middle - 1]!.timestamp
+    : Math.round(Math.max(1, spec.episode.endTimestamp - spec.episode.startTimestamp) / 60);
+  const interval = Number.isFinite(spec.candleIntervalSeconds) && (spec.candleIntervalSeconds ?? 0) > 0
+    ? spec.candleIntervalSeconds!
+    : Math.max(1, inferredLegacyInterval);
   const markerWindow = Math.max(2, interval);
   return fills.filter((fill, index) => {
     const previous = fills[index - 1];
@@ -168,6 +171,13 @@ export async function exportReplayVideo(
   audioOptions: ExportAudioOptions,
   onProgress?: (progress: number) => void,
 ): Promise<{ blob: Blob; extension: "mp4" | "webm" }> {
+  if (!Number.isFinite(config.duration) || config.duration <= 0 || config.duration > 60) {
+    throw new Error("Video duration must be between 1 and 60 seconds.");
+  }
+  if (!Number.isInteger(config.width) || !Number.isInteger(config.height) || config.width < 320 || config.height < 320 || config.width > 3_840 || config.height > 3_840) {
+    throw new Error("Video dimensions must be whole numbers between 320 and 3840 pixels.");
+  }
+  if (typeof MediaRecorder === "undefined") throw new Error("This browser does not support local video recording.");
   const canvas = document.createElement("canvas");
   canvas.width = config.width;
   canvas.height = config.height;
@@ -175,73 +185,77 @@ export async function exportReplayVideo(
   if (!context) throw new Error("Canvas rendering is unavailable.");
 
   const audio = new AudioContext();
-  await audio.resume();
-  const destination = audio.createMediaStreamDestination();
+  let stream: MediaStream | null = null;
+  try {
+    await audio.resume();
+    const destination = audio.createMediaStreamDestination();
 
-  const canvasStream = canvas.captureStream(config.fps ?? 30);
-  const stream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
-  const mp4Type = "video/mp4;codecs=avc1.42001E,mp4a.40.2";
-  const webmType = "video/webm;codecs=vp9,opus";
-  const mimeType = MediaRecorder.isTypeSupported(mp4Type) ? mp4Type : webmType;
-  const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-  const pixels = config.width * config.height;
-  const videoBitsPerSecond = Math.max(8_000_000, Math.min(28_000_000, Math.round(pixels * (config.fps ?? 30) * 0.32)));
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
-  const chunks: Blob[] = [];
-  recorder.addEventListener("dataavailable", (event) => {
-    if (event.data.size) chunks.push(event.data);
-  });
+    const canvasStream = canvas.captureStream(config.fps ?? 30);
+    stream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
+    const mp4Type = "video/mp4;codecs=avc1.42001E,mp4a.40.2";
+    const webmType = "video/webm;codecs=vp9,opus";
+    const mimeType = MediaRecorder.isTypeSupported(mp4Type) ? mp4Type : webmType;
+    const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+    const pixels = config.width * config.height;
+    const videoBitsPerSecond = Math.max(8_000_000, Math.min(28_000_000, Math.round(pixels * (config.fps ?? 30) * 0.32)));
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
+    const chunks: Blob[] = [];
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) chunks.push(event.data);
+    });
 
-  const finished = new Promise<Blob>((resolve, reject) => {
-    recorder.addEventListener("stop", () => resolve(new Blob(chunks, { type: mimeType })), { once: true });
-    recorder.addEventListener("error", () => reject(new Error("The browser could not encode this video.")), { once: true });
-  });
+    const finished = new Promise<Blob>((resolve, reject) => {
+      recorder.addEventListener("stop", () => resolve(new Blob(chunks, { type: mimeType })), { once: true });
+      recorder.addEventListener("error", () => reject(new Error("The browser could not encode this video.")), { once: true });
+    });
 
-  const [buyPreparedBuffer, sellPreparedBuffer] = await Promise.all([
-    prepareReplaySound(audio, audioOptions.buySound, audioOptions.buyCustomBuffer),
-    prepareReplaySound(audio, audioOptions.sellSound, audioOptions.sellCustomBuffer),
-  ]);
-  drawReplayFrame(context, spec, config, 0);
-  recorder.start(250);
-  const leadIn = 0.03;
-  const now = audio.currentTime + leadIn;
-  for (const fill of replaySoundEvents(spec)) {
-    const customBuffer = fill.side === "buy" ? buyPreparedBuffer : sellPreparedBuffer;
-    scheduleReplaySound(
-      audio,
-      destination,
-      now + replayEventOffset(fill, spec, config),
-      fill.side === "buy" ? audioOptions.buySound : audioOptions.sellSound,
-      customBuffer,
-      audioOptions.eventVolume ?? 0.8,
-      fill.side,
-    );
+    const [buyPreparedBuffer, sellPreparedBuffer] = await Promise.all([
+      prepareReplaySound(audio, audioOptions.buySound, audioOptions.buyCustomBuffer),
+      prepareReplaySound(audio, audioOptions.sellSound, audioOptions.sellCustomBuffer),
+    ]);
+    drawReplayFrame(context, spec, config, 0);
+    recorder.start(250);
+    const leadIn = 0.03;
+    const now = audio.currentTime + leadIn;
+    for (const fill of replaySoundEvents(spec)) {
+      const customBuffer = fill.side === "buy" ? buyPreparedBuffer : sellPreparedBuffer;
+      scheduleReplaySound(
+        audio,
+        destination,
+        now + replayEventOffset(fill, spec, config),
+        fill.side === "buy" ? audioOptions.buySound : audioOptions.sellSound,
+        customBuffer,
+        audioOptions.eventVolume ?? 0.8,
+        fill.side,
+      );
+    }
+    if (audioOptions.musicBuffer) {
+      const source = audio.createBufferSource();
+      const gain = audio.createGain();
+      source.buffer = audioOptions.musicBuffer;
+      gain.gain.value = audioOptions.musicVolume ?? 0.35;
+      source.connect(gain).connect(destination);
+      const offset = Math.min(audioOptions.musicStart ?? 0, Math.max(0, source.buffer.duration - 0.05));
+      source.start(now, offset, Math.min(config.duration, source.buffer.duration - offset));
+    }
+    const start = performance.now() + leadIn * 1_000;
+    await new Promise<void>((resolve) => {
+      const frame = (time: number) => {
+        const elapsed = (time - start) / 1_000;
+        const progress = Math.max(0, Math.min(1, elapsed / config.duration));
+        drawReplayFrame(context, spec, config, progress);
+        onProgress?.(progress);
+        if (progress >= 1) {
+          recorder.stop();
+          resolve();
+        } else requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+    const blob = await finished;
+    return { blob, extension };
+  } finally {
+    stream?.getTracks().forEach((track) => track.stop());
+    if (audio.state !== "closed") await audio.close();
   }
-  if (audioOptions.musicBuffer) {
-    const source = audio.createBufferSource();
-    const gain = audio.createGain();
-    source.buffer = audioOptions.musicBuffer;
-    gain.gain.value = audioOptions.musicVolume ?? 0.35;
-    source.connect(gain).connect(destination);
-    const offset = Math.min(audioOptions.musicStart ?? 0, Math.max(0, source.buffer.duration - 0.05));
-    source.start(now, offset, Math.min(config.duration, source.buffer.duration - offset));
-  }
-  const start = performance.now() + leadIn * 1_000;
-  await new Promise<void>((resolve) => {
-    const frame = (time: number) => {
-      const elapsed = (time - start) / 1_000;
-      const progress = Math.max(0, Math.min(1, elapsed / config.duration));
-      drawReplayFrame(context, spec, config, progress);
-      onProgress?.(progress);
-      if (progress >= 1) {
-        recorder.stop();
-        resolve();
-      } else requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-  });
-  const blob = await finished;
-  stream.getTracks().forEach((track) => track.stop());
-  await audio.close();
-  return { blob, extension };
 }

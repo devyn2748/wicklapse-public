@@ -7,18 +7,18 @@ Wicklapse is a Manifest V3 Chrome extension that turns a selected Axiom spot tra
 1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode**.
 3. Choose **Load unpacked**.
-4. Select `.output/chrome-mv3` from this project.
+4. Run `npm run build`, then select `Wicklapse-Unpacked` from this project.
 5. Reload any Axiom tabs that were already open when Wicklapse was installed.
 6. Open the Axiom Share dialog and choose **Create Trade Replay with Wicklapse**. The toolbar icon can open the same flow from an active Axiom page.
 
-Instant Export sends the current `/meme/{pairAddress}` and the saved public trading wallet(s) directly to Axiom's authenticated transactions feed. It does not open or scrape **My Trades**, and it does not require an RPC key. Only **Open Advanced Workstation** creates a full studio tab; RPC remains available there as an optional fallback.
+Instant Export automatically reads the signed-in account's public, non-archived Solana trading wallets from Axiom, combines them as one position, and sends them with the current `/meme/{pairAddress}` to Axiom's authenticated transactions feed. It does not open or scrape **My Trades**, inspect credentials, or require an RPC key. Only **Open Advanced Workstation** creates a full studio tab; manually entered public wallets and RPC remain optional fallbacks.
 
 ## Test the Axiom-to-video flow
 
 1. Open an Axiom spot token page and its Share dialog.
 2. Confirm the Wicklapse entry appears once and does not interfere with Axiom's controls.
-3. Save one or more public Axiom trading wallets in Advanced, separated by commas, then return to the coin page.
-4. Confirm Instant Export opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill.
+3. Confirm Instant Export detects all public Solana trading wallets in the signed-in Axiom account without asking for wallet input.
+4. Confirm it opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill across those wallets.
 5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and Buy/Sell sound dropdown choices.
 6. Export the video and verify its duration, 1920×1080 dimensions, audio timing, running mark-to-market P&L, OHLC candles, and buy/sell markers.
 7. Open Advanced and test 1:1, 9:16, 4:5, 16:9, custom dimensions, wallet visibility, value precision, a background image, and uploaded music.
@@ -36,13 +36,13 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 ## Test build scope
 
 - Axiom Share dialog integration
-- Direct authenticated Axiom transaction-feed lookup by current pair and one or more public trading wallets
+- Automatic Axiom public-wallet discovery and batched transaction-feed lookup by current pair across multiple wallets
 - Compact-row validation, malformed-row isolation, signature deduplication, and chronological normalization
 - Optional Solana wallet/RPC fallback in Advanced
 - In-page Instant Export and full-tab Advanced Workstation
 - Compact right-side Instant panel that leaves the Axiom chart visible and interactive instead of dimming the entire page
 - Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
-- Adaptive GeckoTerminal OHLCV history using 1-second candles for trades up to five minutes, then 1-minute and progressively larger intervals for longer positions
+- Axiom `pair-chart-v3` candles with native dynamic intervals, GeckoTerminal fallback, and execution-path fallback
 - Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels, plus an Advanced threshold and overrides for forced K, forced M, or raw token price
 - Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
 - Animated chart auto-fit that progressively zooms out while the active candle body and wick grow from the open
@@ -60,9 +60,9 @@ Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a
 
 ## Current first-build limitations
 
-- Exact executions depend on the signed-in Axiom session and the stability of `transactions-feed-v4`; the replay UI is isolated from its compact array indexes.
+- Exact executions and automatic wallet discovery depend on the signed-in Axiom session and the stability of Axiom's wallet and `transactions-feed-v4` endpoints; provider-specific payloads remain isolated from the replay UI.
 - Token symbol, mint, image, and optional P&L summary still come from the active Axiom coin page. Chart DOM data is not read.
-- Market candles and estimated historical market cap use GeckoTerminal when the captured Axiom pool resolves; otherwise the renderer uses a plainly styled angular execution path rather than synthetic candles. Market cap falls back to the pool FDV when a circulating-cap figure is unavailable.
+- Market candles use Axiom `pair-chart-v3` first and GeckoTerminal second; otherwise the renderer labels and uses the execution-price path rather than inventing candles. Historical market-cap scaling still depends on GeckoTerminal and may fall back to pool FDV.
 - USD display uses the current SOL/USD rate rather than the historical rate at each fill.
 - Custom Advanced backgrounds currently accept images; custom video backgrounds are planned next.
 - Export uses MP4/H.264 when the browser exposes that encoder and otherwise downloads WebM/VP9.

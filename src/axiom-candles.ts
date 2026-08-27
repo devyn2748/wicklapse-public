@@ -1,4 +1,4 @@
-import type { AxiomPairContext, ReplayCandle, ShareContext, TradeEpisode } from "./domain";
+import { AxiomPairContextSchema, SolanaAddressSchema, type AxiomPairContext, type ReplayCandle, type ShareContext, type TradeEpisode } from "./domain";
 
 export const AXIOM_CANDLE_INTERVALS = [
   { value: "1s", seconds: 1 },
@@ -74,14 +74,15 @@ export function extractAxiomPairContext(value: string, expectedPairAddress?: str
   const url = new URL(sanitized);
   const pairAddress = url.searchParams.get("pairAddress");
   if (!pairAddress) return null;
-
-  return {
+  const rawTokenAddress = url.searchParams.get("tokenAddress");
+  const tokenAddress = rawTokenAddress && SolanaAddressSchema.safeParse(rawTokenAddress).success ? rawTokenAddress : null;
+  const parsed = AxiomPairContextSchema.safeParse({
     pairAddress,
-    tokenAddress: url.searchParams.get("tokenAddress"),
+    tokenAddress,
     chartBaseUrl: `${url.protocol}//${url.host}${url.pathname}`,
     metadata: {
       pairAddress,
-      tokenAddress: url.searchParams.get("tokenAddress") ?? undefined,
+      tokenAddress: tokenAddress ?? undefined,
       openTrading: url.searchParams.get("openTrading") ?? undefined,
       pairCreatedAt: url.searchParams.get("pairCreatedAt") ?? undefined,
       lastTransactionTime: url.searchParams.get("lastTransactionTime") ?? undefined,
@@ -91,7 +92,8 @@ export function extractAxiomPairContext(value: string, expectedPairAddress?: str
       showOutliers: url.searchParams.get("showOutliers") ?? undefined,
     },
     capturedAt: Date.now(),
-  };
+  });
+  return parsed.success ? parsed.data : null;
 }
 
 export function intervalSeconds(interval: AxiomInterval): number {
@@ -145,7 +147,6 @@ export function buildAxiomCandleRequest(
 
   let pairContext = context.axiomPairContext;
   if (pairContext && pairContext.pairAddress !== context.pairAddress) {
-    console.warn(`[Wicklapse:Candles] Stored pair context (${pairContext.pairAddress}) does not match active pair (${context.pairAddress}). Guard blocked candle request.`);
     return null; // Reject stale or mismatched context completely, forcing fallback
   }
 
@@ -183,11 +184,9 @@ export function buildAxiomCandleRequest(
   if (!url.searchParams.has("showOutliers")) url.searchParams.set("showOutliers", "false");
   if (!url.searchParams.has("v")) url.searchParams.set("v", "2");
   
-  if (context.tokenMint && !url.searchParams.has("tokenAddress") && (!pairContext || pairContext.tokenAddress === context.tokenMint)) {
+  if (context.tokenMint && !url.searchParams.has("tokenAddress") && (!pairContext?.tokenAddress || pairContext.tokenAddress === context.tokenMint)) {
     url.searchParams.set("tokenAddress", context.tokenMint);
   }
-
-  console.info(`[Wicklapse:Candles] Building candle request for pair=${context.pairAddress}, token=${url.searchParams.get("tokenAddress")}, interval=${interval}, countBars=${countBars}`);
 
   return { url: url.toString(), fromSeconds, toSeconds, interval, intervalSeconds: seconds, countBars };
 }
@@ -226,6 +225,7 @@ export function fillMissingCandleBuckets(candles: ReplayCandle[], seconds: numbe
   if (candles.length < 2 || seconds <= 0) return candles;
   const filled: ReplayCandle[] = [candles[0]!];
   for (const candle of candles.slice(1)) {
+    if (filled.length >= 1_000) break;
     const previous = filled.at(-1)!;
     for (let timestamp = previous.timestamp + seconds; timestamp < candle.timestamp - seconds * 0.25; timestamp += seconds) {
       filled.push({
@@ -238,7 +238,7 @@ export function fillMissingCandleBuckets(candles: ReplayCandle[], seconds: numbe
       });
       if (filled.length >= 1_000) break;
     }
-    filled.push(candle);
+    if (filled.length < 1_000) filled.push(candle);
   }
   return filled;
 }

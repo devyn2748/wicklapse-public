@@ -2,7 +2,8 @@ import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
-import { extractAxiomPairContext, sanitizeAxiomChartUrl } from "../../src/axiom-candles";
+import { extractAxiomPairContext } from "../../src/axiom-candles";
+import { fetchAxiomWalletAddresses } from "../../src/axiom-wallets";
 import { ShareContextSchema, type AxiomPairContext, type ShareContext } from "../../src/domain";
 import { InstantOverlay } from "../../src/instant-overlay";
 import overlayStyles from "../../src/instant-overlay.css?inline";
@@ -195,6 +196,7 @@ function buildShareContext(): ShareContext {
   const holding = numberAfterLabel(summaryText, ["Holding", "Position"]);
   const sold = numberAfterLabel(summaryText, ["Sold"]);
 
+  const pairContext = findAxiomPairContext();
   return ShareContextSchema.parse({
     id: crypto.randomUUID(),
     capturedAt: Date.now(),
@@ -204,8 +206,8 @@ function buildShareContext(): ShareContext {
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
-    axiomChartUrl: findAxiomPairContext()?.chartBaseUrl ?? null,
-    axiomPairContext: findAxiomPairContext(),
+    axiomChartUrl: pairContext?.chartBaseUrl ?? null,
+    axiomPairContext: pairContext,
     walletAddress: null,
     walletLabel: null,
     boughtSol: summaryUsesSol ? numberAfterLabel(summaryText, ["Bought", "Invested"]) : null,

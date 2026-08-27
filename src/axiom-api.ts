@@ -22,7 +22,10 @@ export function pairAddressFromAxiomUrl(value: string): string | null {
 interface FetchOptions {
   fetchImpl?: typeof fetch;
   now?: () => number;
+  signal?: AbortSignal;
 }
+
+const WALLETS_PER_REQUEST = 100;
 
 function decimalString(value: unknown): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
@@ -39,6 +42,12 @@ function decimalString(value: unknown): string | null {
 export function normalizeWalletAddresses(values: readonly string[]): string[] {
   const candidates = values.flatMap((value) => value.split(/[\s,]+/)).map((value) => value.trim()).filter(Boolean);
   return [...new Set(candidates)].filter((value) => SolanaAddressSchema.safeParse(value).success);
+}
+
+function compareExecutions(left: TradeExecution, right: TradeExecution): number {
+  return left.timestamp - right.timestamp
+    || (left.side === right.side ? 0 : left.side === "buy" ? -1 : 1)
+    || left.signature.localeCompare(right.signature);
 }
 
 export function parseAxiomTransactionRow(
@@ -72,7 +81,13 @@ export function parseAxiomTransactionRow(
   const priceUsd = decimalString(row[8]);
   const totalSol = decimalString(row[10]);
   const totalUsd = decimalString(row[11]);
-  if (!tokenAmount || new Decimal(tokenAmount).isZero() || priceSol === null || priceUsd === null || totalSol === null || totalUsd === null) {
+  if (
+    !tokenAmount || new Decimal(tokenAmount).isZero()
+    || !priceSol || new Decimal(priceSol).isZero()
+    || priceUsd === null
+    || !totalSol || new Decimal(totalSol).isZero()
+    || totalUsd === null
+  ) {
     return null;
   }
 
@@ -114,8 +129,7 @@ export function parseAxiomTransactionsResponse(
     const execution = parseAxiomTransactionRow(row, request.pairAddress, wallets);
     if (execution && !bySignature.has(execution.signature)) bySignature.set(execution.signature, execution);
   }
-  return [...bySignature.values()].sort((left, right) =>
-    left.timestamp - right.timestamp || left.signature.localeCompare(right.signature));
+  return [...bySignature.values()].sort(compareExecutions);
 }
 
 export async function fetchAxiomExecutions(
@@ -127,32 +141,43 @@ export async function fetchAxiomExecutions(
   if (!walletAddresses.length) throw new Error("Add at least one public Axiom trading wallet in Advanced settings.");
 
   const controller = new AbortController();
+  const abortFromCaller = () => controller.abort();
+  options.signal?.addEventListener("abort", abortFromCaller, { once: true });
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await (options.fetchImpl ?? fetch)(AXIOM_TRANSACTIONS_FEED_URL, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pairAddress,
-        orderBy: "DESC",
-        makerAddress: walletAddresses.join(","),
-        v: (options.now ?? Date.now)(),
-      }),
-      signal: controller.signal,
-    });
-    if (response.status === 401 || response.status === 403) {
-      throw new Error("Axiom rejected the trade lookup. Sign in to Axiom again and retry.");
+    const bySignature = new Map<string, TradeExecution>();
+    for (let start = 0; start < walletAddresses.length; start += WALLETS_PER_REQUEST) {
+      const batch = walletAddresses.slice(start, start + WALLETS_PER_REQUEST);
+      const response = await (options.fetchImpl ?? fetch)(AXIOM_TRANSACTIONS_FEED_URL, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pairAddress,
+          orderBy: "DESC",
+          makerAddress: batch.join(","),
+          v: (options.now ?? Date.now)(),
+        }),
+        signal: controller.signal,
+      });
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("Axiom rejected the trade lookup. Sign in to Axiom again and retry.");
+      }
+      if (response.status === 429) throw new Error("Axiom is rate-limiting trade lookups. Wait a moment and retry.");
+      if (!response.ok) throw new Error(`Axiom trade lookup returned HTTP ${response.status}.`);
+      for (const execution of parseAxiomTransactionsResponse(await response.json(), { pairAddress, walletAddresses: batch })) {
+        if (!bySignature.has(execution.signature)) bySignature.set(execution.signature, execution);
+      }
     }
-    if (response.status === 429) throw new Error("Axiom is rate-limiting trade lookups. Wait a moment and retry.");
-    if (!response.ok) throw new Error(`Axiom trade lookup returned HTTP ${response.status}.`);
-    return parseAxiomTransactionsResponse(await response.json(), { pairAddress, walletAddresses });
+    return [...bySignature.values()].sort(compareExecutions);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (options.signal?.aborted) throw error;
       throw new Error("Axiom trade lookup timed out after 20 seconds.");
     }
     throw error;
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
 }

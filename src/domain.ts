@@ -24,23 +24,9 @@ export const TradeExecutionSchema = z.object({
 
 export type TradeExecution = z.infer<typeof TradeExecutionSchema>;
 
-export const AxiomTradeEventSchema = z.object({
-  id: z.string().min(1).max(160),
-  side: z.enum(["buy", "sell"]),
-  tokenAmount: z.string().regex(/^\d+(?:\.\d+)?$/).nullable(),
-  quoteSol: z.string().regex(/^\d+(?:\.\d+)?$/),
-  marketCapUsd: z.string().regex(/^\d+(?:\.\d+)?$/).nullable(),
-  timestamp: z.number().int().positive().nullable(),
-  displayAge: z.string().max(24).nullable(),
-  signature: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{64,96}$/).nullable(),
-  rowIndex: z.number().int().nonnegative(),
-});
-
-export type AxiomTradeEvent = z.infer<typeof AxiomTradeEventSchema>;
-
 export const AxiomPairMetadataSchema = z.object({
-  pairAddress: z.string(),
-  tokenAddress: z.string().optional(),
+  pairAddress: SolanaAddressSchema,
+  tokenAddress: SolanaAddressSchema.optional(),
   openTrading: z.string().optional(),
   pairCreatedAt: z.string().optional(),
   lastTransactionTime: z.string().optional(),
@@ -53,8 +39,8 @@ export const AxiomPairMetadataSchema = z.object({
 export type AxiomPairMetadata = z.infer<typeof AxiomPairMetadataSchema>;
 
 export const AxiomPairContextSchema = z.object({
-  pairAddress: z.string(),
-  tokenAddress: z.string().nullable(),
+  pairAddress: SolanaAddressSchema,
+  tokenAddress: SolanaAddressSchema.nullable(),
   chartBaseUrl: z.string().url(),
   metadata: AxiomPairMetadataSchema,
   capturedAt: z.number().int().positive(),
@@ -75,8 +61,7 @@ export const ShareContextSchema = z.object({
   axiomChartUrl: z.string().url().nullable().optional(),
   axiomPairContext: AxiomPairContextSchema.nullable().optional(),
   tradeExecutions: z.array(TradeExecutionSchema).max(5_000).optional(),
-  tradeEvents: z.array(AxiomTradeEventSchema).max(250).optional(),
-  walletAddresses: z.array(SolanaAddressSchema).max(25).optional(),
+  walletAddresses: z.array(SolanaAddressSchema).max(5_000).optional(),
   walletAddress: z.string().nullable(),
   walletLabel: z.string().max(80).nullable(),
   boughtSol: z.string().nullable(),

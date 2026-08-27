@@ -40,5 +40,18 @@ describe("Axiom wallet discovery", () => {
     }));
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty("body");
   });
-});
 
+  it("accepts a nested data envelope and propagates caller cancellation", async () => {
+    expect(parseAxiomPublicWallets({ data: { wallets: [
+      { network: "sol", walletAddress: primaryWallet, isPrimary: true, isArchived: false },
+    ] } })).toHaveLength(1);
+
+    const controller = new AbortController();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }));
+    const pending = fetchAxiomWalletAddresses({ fetchImpl: fetchMock as unknown as typeof fetch, signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});

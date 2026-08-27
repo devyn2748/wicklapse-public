@@ -6,7 +6,7 @@ import {
   type ShareContext,
   type StudioProject,
 } from "./domain";
-import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
+import { DEFAULT_STUDIO_SETTINGS, StudioSettingsSchema, type StudioSettings } from "./studio-settings";
 import { normalizeWalletAddresses } from "./axiom-api";
 
 const KEYS = {
@@ -57,15 +57,6 @@ export async function loadRpcSettings(): Promise<RpcSettings | null> {
   return parsed.success ? parsed.data : null;
 }
 
-export async function clearRpcSettings(): Promise<void> {
-  await browser.storage.local.remove(KEYS.rpcSettings);
-  try {
-    await browser.storage.session.remove(KEYS.rpcSettings);
-  } catch {
-    // A content-script caller can still clear the persisted value without session access.
-  }
-}
-
 export async function saveTradingWalletAddresses(walletAddresses: string[]): Promise<void> {
   await browser.storage.local.set({ [KEYS.tradingWallets]: normalizeWalletAddresses(walletAddresses) });
 }
@@ -93,7 +84,7 @@ export async function loadProject(): Promise<StudioProject | null> {
 }
 
 export async function saveStudioSettings(settings: StudioSettings): Promise<void> {
-  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 5, settings } });
+  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 5, settings: StudioSettingsSchema.parse(settings) } });
 }
 
 export async function loadStudioSettings(): Promise<StudioSettings> {
@@ -103,8 +94,9 @@ export async function loadStudioSettings(): Promise<StudioSettings> {
   if (version !== 3 && version !== 4 && version !== 5) {
     return DEFAULT_STUDIO_SETTINGS;
   }
-  return {
+  const parsed = StudioSettingsSchema.safeParse({
     ...DEFAULT_STUDIO_SETTINGS,
     ...((value as { settings?: Partial<StudioSettings> }).settings ?? {}),
-  };
+  });
+  return parsed.success ? parsed.data : DEFAULT_STUDIO_SETTINGS;
 }

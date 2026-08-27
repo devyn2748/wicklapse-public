@@ -1,6 +1,7 @@
+import { z } from "zod";
 import type { Currency } from "./domain";
 import type { CandleIntervalPreference } from "./axiom-candles";
-import type { SoundName } from "./export-video";
+import { BUNDLED_SOUND_PRESETS, type SoundName } from "./export-video";
 import type { ThemeName, WalletVisibility } from "./renderer";
 
 export type CardAspectRatio = "16:9" | "9:16";
@@ -24,6 +25,30 @@ export interface StudioSettings {
   aspectRatio: CardAspectRatio;
   backgroundStyle: BackgroundStyle;
 }
+
+const soundNames = new Set<string>([
+  "pulse", "chime", "click", "confirm", "cash", "snap", "custom", "off",
+  ...BUNDLED_SOUND_PRESETS.map((preset) => preset.value),
+]);
+
+export const StudioSettingsSchema = z.object({
+  duration: z.number().finite().min(1).max(60),
+  theme: z.enum(["obsidian", "neon", "minimal", "cyberpunk", "sunset", "matrix", "hacker"]),
+  currency: z.enum(["SOL", "USD"]),
+  buySound: z.custom<SoundName>((value) => typeof value === "string" && soundNames.has(value)),
+  sellSound: z.custom<SoundName>((value) => typeof value === "string" && soundNames.has(value)),
+  exactValues: z.boolean(),
+  walletVisibility: z.enum(["hidden", "short", "full"]),
+  width: z.number().int().min(320).max(3_840),
+  height: z.number().int().min(320).max(3_840),
+  fps: z.union([z.literal(30), z.literal(60)]),
+  chartMetric: z.enum(["marketCap", "price"]),
+  marketCapFormat: z.enum(["auto", "thousands", "millions"]),
+  marketCapThreshold: z.number().finite().min(1_000).max(1_000_000_000),
+  candleInterval: z.enum(["auto", "1s", "5s", "15s", "30s", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "12h", "1d"]),
+  aspectRatio: z.enum(["16:9", "9:16"]),
+  backgroundStyle: z.enum(["glow", "solid", "grid", "particles"]),
+});
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   duration: 8,
@@ -50,4 +75,3 @@ export const ASPECT_PRESETS = [
   { label: "9:16", width: 1080, height: 1920 },
   { label: "4:5", width: 1080, height: 1350 },
 ] as const;
-

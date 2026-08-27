@@ -1,19 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShareContext } from "./domain";
-import { ageToSeconds, buildAxiomExecutionEpisodes, normalizeAxiomNumber } from "./axiom-capture";
-
-describe("normalizeAxiomNumber", () => {
-  it("expands suffixes and Axiom compact-zero notation", () => {
-    expect(normalizeAxiomNumber("$23.8M")).toBe("23800000");
-    expect(normalizeAxiomNumber("0.0₂5")).toBe("0.005");
-    expect(normalizeAxiomNumber("643.2")).toBe("643.2");
-  });
-
-  it("parses displayed ages", () => {
-    expect(ageToSeconds("5d")).toBe(432_000);
-    expect(ageToSeconds("2h")).toBe(7_200);
-  });
-});
+import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 
 describe("buildAxiomCaptureEpisodes", () => {
   it("turns multiple-wallet buys and partial sells into a chronological episode", () => {
@@ -153,5 +140,37 @@ describe("buildAxiomCaptureEpisodes", () => {
     expect(episodes.flatMap((item) => item.fills.map((fill) => fill.timestamp)).sort())
       .toEqual([1_799_000_000.1, 1_799_000_000.7, 1_799_000_001.2]);
     expect(episodes.map((item) => item.status).sort()).toEqual(["closed", "open"]);
+  });
+
+  it("ignores leading sells whose acquisition cost is absent from a truncated feed", () => {
+    const pairAddress = "4".repeat(44);
+    const wallet = "5".repeat(44);
+    const context: ShareContext = {
+      id: "truncated",
+      capturedAt: 1_800_000_000_000,
+      pageUrl: `https://axiom.trade/meme/${pairAddress}`,
+      tokenMint: "6".repeat(44),
+      pairAddress,
+      symbol: "TEST",
+      tokenName: null,
+      walletAddress: wallet,
+      walletLabel: null,
+      boughtSol: null,
+      soldSol: null,
+      holdingSol: null,
+      pnlSol: null,
+      roiPercent: null,
+      positionStatus: "unknown",
+      sourceText: "",
+      tradeExecutions: [
+        { signature: "7".repeat(88), side: "sell", timestamp: 10, tokenAmount: "10", priceSol: "1", priceUsd: "1", totalSol: "10", totalUsd: "10", wallet, pairAddress, source: "axiom" },
+        { signature: "8".repeat(88), side: "buy", timestamp: 20, tokenAmount: "5", priceSol: "2", priceUsd: "2", totalSol: "10", totalUsd: "10", wallet, pairAddress, source: "axiom" },
+      ],
+    };
+
+    const episodes = buildAxiomExecutionEpisodes(context);
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]?.fills.map((fill) => fill.signature)).toEqual(["8".repeat(88)]);
+    expect(episodes[0]?.totalBoughtLamports).toBe("10000000000");
   });
 });

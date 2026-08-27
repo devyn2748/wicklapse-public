@@ -1,13 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
 import { fetchAxiomExecutions } from "./axiom-api";
 import { fetchAxiomWalletAddresses } from "./axiom-wallets";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
-import { selectAllowedIntervals } from "./axiom-candles";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
-import { drawReplayFrame, type RenderConfig, type ThemeName } from "./renderer";
+import { drawReplayFrame, type BackgroundStyle, type RenderConfig, type ThemeName } from "./renderer";
 import {
   loadStudioSettings,
   loadTradingWalletAddresses,
@@ -186,7 +185,10 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
       }
       if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
       setStatus(`Retrieving executions across ${walletAddresses.length} Axiom wallet${walletAddresses.length === 1 ? "" : "s"}…`);
-      const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
+      const tradeExecutions = await fetchAxiomExecutions(
+        { pairAddress: context.pairAddress, walletAddresses },
+        { signal: request.signal },
+      );
       if (!tradeExecutions.length) {
         throw new Error("No trades found across the detected Axiom wallet(s) for this token.");
       }
@@ -311,7 +313,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => patch("duration", value)} /></div>
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value as any)} /></div>
+            <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value)} /></div>
             <div className="wick-control-section">
   <div className="wick-section-title">
     <h3>Visual Theme</h3>
@@ -332,7 +334,7 @@ export function InstantOverlay({ context, onClose, onOpenAdvanced }: InstantOver
     <h3>Background Design</h3>
     <span>Wicklapse</span>
   </div>
-  <select className="wick-sound-select" value={settings.backgroundStyle} onChange={(e) => patch("backgroundStyle", e.target.value as any)}>
+  <select className="wick-sound-select" value={settings.backgroundStyle} onChange={(e) => patch("backgroundStyle", e.target.value as BackgroundStyle)}>
     <option value="glow">Ambient Glow</option>
     <option value="solid">Solid Color</option>
     <option value="grid">Retro Grid</option>

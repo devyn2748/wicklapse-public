@@ -66,4 +66,15 @@ describe("replay audio timing", () => {
     const partial = fill("buy-partial", 101, "buy");
     expect(replaySoundEvents({ ...spec, episode: { ...spec.episode, fills: [buy, partial, sell] } }).map((event) => event.signature)).toEqual(["buy", "sell"]);
   });
+
+  it("uses the declared candle interval when sparse source timestamps have gaps", () => {
+    const partial = fill("buy-partial", 104, "buy");
+    const sparseSpec = {
+      ...spec,
+      candleIntervalSeconds: 1,
+      candles: spec.candles?.filter((_, index) => index % 10 === 0),
+      episode: { ...spec.episode, fills: [buy, partial, sell] },
+    };
+    expect(replaySoundEvents(sparseSpec).map((event) => event.signature)).toEqual(["buy", "buy-partial", "sell"]);
+  });
 });

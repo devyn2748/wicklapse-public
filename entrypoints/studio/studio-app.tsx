@@ -12,7 +12,6 @@ import {
 import {
   RpcSettingsSchema,
   ShareContextSchema,
-  type Currency,
   type ReplaySpec,
   type RpcSettings,
   type ShareContext,
@@ -22,7 +21,7 @@ import {
 import { normalizeWalletAddresses } from "../../src/axiom-api";
 import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
-import { buildReplayPoints, buildTradeEpisodes, solFromLamports } from "../../src/episodes";
+import { buildTradeEpisodes, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
 import { drawReplayFrame, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
@@ -60,7 +59,7 @@ function demoFill(index: number, side: "buy" | "sell", quoteSol: string, price: 
   };
 }
 
-export function makeDemoSpec(): ReplaySpec {
+function makeDemoSpec(): ReplaySpec {
   const fills = [
     demoFill(0, "buy", "0.30", "0.000011"),
     demoFill(1, "buy", "0.28", "0.000015"),
@@ -213,6 +212,7 @@ function PreviewCanvas({
           duration: settings.duration,
           currency: settings.currency,
           theme: settings.theme,
+          backgroundStyle: settings.backgroundStyle,
           exactValues: settings.exactValues,
           walletVisibility: settings.walletVisibility,
           chartMetric: settings.chartMetric,
@@ -412,12 +412,18 @@ export function StudioApp(): JSX.Element {
         setContext(project.shareContext);
         setMint(project.shareContext.tokenMint ?? "");
         setSpec(project.replaySpec);
+        const restoredEpisodes = project.shareContext.tradeExecutions?.length
+          ? buildAxiomExecutionEpisodes(project.shareContext)
+          : [project.replaySpec.episode];
+        setEpisodes(restoredEpisodes.length ? restoredEpisodes : [project.replaySpec.episode]);
+        setSelectedEpisodeId(project.selectedEpisodeId ?? project.replaySpec.episode.id);
         setStage("studio");
       }
     });
   }, []);
 
   useEffect(() => () => replayRequestRef.current.cancel(), []);
+  useEffect(() => () => backgroundImage?.close(), [backgroundImage]);
 
   const selectedEpisode = episodes.find((episode) => episode.id === selectedEpisodeId) ?? episodes[0] ?? null;
   const allowedCandleIntervals = useMemo(
@@ -587,6 +593,7 @@ export function StudioApp(): JSX.Element {
         duration: settings.duration,
         currency: settings.currency,
         theme: settings.theme,
+        backgroundStyle: settings.backgroundStyle,
         exactValues: settings.exactValues,
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
@@ -632,18 +639,41 @@ export function StudioApp(): JSX.Element {
       setError("The first build supports image backgrounds. Video backgrounds are next in the Advanced pipeline.");
       return;
     }
-    const bitmap = await createImageBitmap(file);
-    backgroundImage?.close();
-    setBackgroundImage(bitmap);
-    setPreviewRevision((revision) => revision + 1);
+    if (file.size > 20 * 1024 * 1024) {
+      setError("Background images must be 20 MB or smaller.");
+      return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      if (bitmap.width > 8_192 || bitmap.height > 8_192 || bitmap.width * bitmap.height > 40_000_000) {
+        bitmap.close();
+        setError("This background is too large. Use an image no larger than 8192 px or 40 megapixels.");
+        return;
+      }
+      setBackgroundImage(bitmap);
+      setPreviewRevision((revision) => revision + 1);
+      setError("");
+    } catch {
+      setError("This background image could not be decoded by Chrome.");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   const loadMusic = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!file.type.startsWith("audio/") || file.size > 50 * 1024 * 1024) {
+      setError("Custom music must be an audio file no larger than 50 MB.");
+      event.target.value = "";
+      return;
+    }
     const audio = new AudioContext();
     try {
       const buffer = await audio.decodeAudioData(await file.arrayBuffer());
+      if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 1_800) {
+        throw new Error("Unsupported music duration");
+      }
       setMusicBuffer(buffer);
       setMusicStart(0);
       setPreviewRevision((revision) => revision + 1);
@@ -651,13 +681,14 @@ export function StudioApp(): JSX.Element {
       setError("This audio file could not be decoded by Chrome.");
     } finally {
       await audio.close();
+      event.target.value = "";
     }
   };
 
   const loadEventSound = async (side: "buy" | "sell", event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
+    if (!file.type.startsWith("audio/") || file.size > 8 * 1024 * 1024) {
       setError("Custom event sounds must be 8 MB or smaller.");
       return;
     }
@@ -797,7 +828,7 @@ export function StudioApp(): JSX.Element {
                     <div><span>Bought</span><b>{solFromLamports(episode.totalBoughtLamports)} SOL</b></div>
                     <div><span>Sold</span><b>{solFromLamports(episode.totalSoldLamports)} SOL</b></div>
                   </div>
-                  <div className="candidate-pnl"><span>Approx. closed P&L</span><strong>{solFromLamports(episode.approximatePnlLamports)} SOL</strong></div>
+                  <div className="candidate-pnl"><span>{episode.status === "closed" ? "Approx. closed P&L" : "Net cash flow so far"}</span><strong>{solFromLamports(episode.approximatePnlLamports)} SOL</strong></div>
                 </button>
               );
             })}

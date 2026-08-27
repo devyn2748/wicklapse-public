@@ -43,10 +43,11 @@ export function scoreEpisode(episode: TradeEpisode, context: ShareContext): numb
 
 export function buildTradeEpisodes(fills: TradeFill[], context: ShareContext): TradeEpisode[] {
   if (!fills.length) return [];
+  const chronological = [...fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot || left.signature.localeCompare(right.signature));
   const groups: TradeFill[][] = [];
   let current: TradeFill[] = [];
 
-  for (const fill of fills) {
+  for (const fill of chronological) {
     if (current.length === 0) current.push(fill);
     else {
       const previous = current.at(-1);
@@ -97,7 +98,8 @@ export function buildReplayPoints(episode: TradeEpisode): ReplayPoint[] {
   let cashFlow = new Decimal(0);
   let holdings = new Decimal(0);
   let fees = new Decimal(0);
-  for (const fill of episode.fills) {
+  const chronological = [...episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot || left.signature.localeCompare(right.signature));
+  for (const fill of chronological) {
     const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
     const tokenAmount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
     if (fill.side === "buy") {

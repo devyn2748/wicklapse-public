@@ -17,7 +17,9 @@ interface AxiomPublicWallet {
 function walletRows(payload: unknown): unknown[] {
   if (!payload || typeof payload !== "object") return [];
   const wallets = (payload as Record<string, unknown>).wallets;
-  return Array.isArray(wallets) ? wallets : [];
+  if (Array.isArray(wallets)) return wallets;
+  const data = (payload as Record<string, unknown>).data;
+  return data && typeof data === "object" ? walletRows(data) : [];
 }
 
 /**
@@ -50,16 +52,30 @@ export function parseAxiomPublicWallets(payload: unknown): AxiomPublicWallet[] {
 export async function fetchAxiomWalletAddresses(
   options: FetchAxiomWalletOptions = {},
 ): Promise<string[]> {
-  const response = await (options.fetchImpl ?? fetch)(AXIOM_WALLETS_URL, {
-    method: "POST",
-    credentials: "include",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    signal: options.signal,
-  });
-  if (response.status === 401 || response.status === 403) {
-    throw new Error("Axiom could not identify the signed-in trading wallets. Sign in again and retry.");
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort();
+  options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await (options.fetchImpl ?? fetch)(AXIOM_WALLETS_URL, {
+      method: "POST",
+      credentials: "include",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      signal: controller.signal,
+    });
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Axiom could not identify the signed-in trading wallets. Sign in again and retry.");
+    }
+    if (response.status === 429) throw new Error("Axiom is rate-limiting wallet detection. Wait a moment and retry.");
+    if (!response.ok) throw new Error(`Axiom wallet lookup returned HTTP ${response.status}.`);
+    return normalizeWalletAddresses(parseAxiomPublicWallets(await response.json()).map((wallet) => wallet.address));
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError" && !options.signal?.aborted) {
+      throw new Error("Axiom wallet detection timed out after 15 seconds.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
-  if (!response.ok) throw new Error(`Axiom wallet lookup returned HTTP ${response.status}.`);
-  return normalizeWalletAddresses(parseAxiomPublicWallets(await response.json()).map((wallet) => wallet.address));
 }
-
