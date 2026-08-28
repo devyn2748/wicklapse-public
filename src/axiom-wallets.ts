@@ -73,6 +73,7 @@ export async function fetchAxiomWalletAddresses(
       : await (options.fetchImpl ?? fetch)(AXIOM_WALLETS_URL, {
           method: "POST",
           credentials: "include",
+          cache: "no-store",
           headers: { accept: "application/json", "content-type": "application/json" },
           signal: controller.signal,
         }).then(async (response) => ({ ok: response.ok, status: response.status, payload: await response.json() }));

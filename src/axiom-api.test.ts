@@ -82,7 +82,7 @@ describe("fetchAxiomExecutions", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe(AXIOM_TRANSACTIONS_FEED_URL);
-    expect(init).toMatchObject({ method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
+    expect(init).toMatchObject({ method: "POST", credentials: "include", cache: "no-store", headers: { "Content-Type": "application/json" } });
     expect(JSON.parse(String(init?.body))).toEqual({
       pairAddress,
       orderBy: "DESC",

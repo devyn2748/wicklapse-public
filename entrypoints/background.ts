@@ -14,6 +14,7 @@ async function fetchAxiomJson(message: {
     const response = await fetch(url, {
       method: "POST",
       credentials: "include",
+      cache: "no-store",
       headers: { accept: "application/json", "content-type": "application/json" },
       ...(message.kind === "executions" ? { body: JSON.stringify(message.body ?? {}) } : {}),
     });

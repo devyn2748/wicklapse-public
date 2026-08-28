@@ -54,6 +54,7 @@ describe("Axiom wallet discovery", () => {
     expect(fetchMock).toHaveBeenCalledWith(AXIOM_WALLETS_URL, expect.objectContaining({
       method: "POST",
       credentials: "include",
+      cache: "no-store",
     }));
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty("body");
   });
