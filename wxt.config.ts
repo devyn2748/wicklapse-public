@@ -23,7 +23,7 @@ export default defineConfig({
       128: "icon.png"
     },
     web_accessible_resources: [{
-      resources: ["sounds/*.mp3"],
+      resources: ["icon.png", "sounds/*.mp3"],
       matches: ["https://axiom.trade/*", "https://*.axiom.trade/*"]
     }],
     action: {

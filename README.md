@@ -1,60 +1,71 @@
-<div align="center">
-  <img src="public/icon.png" alt="Wicklapse" width="120" />
-  <h1>Wicklapse</h1>
-  <p><strong>Turn any Axiom trade into a polished, share-ready replay video.</strong></p>
-  <p>Wicklapse captures your trade directly from Axiom, rebuilds the price action, and renders the finished video locally in your browser.</p>
-</div>
+# Wicklapse
 
-## Features
+Wicklapse is a Manifest V3 Chrome extension that turns a selected Axiom spot trade into an animated, locally rendered video.
 
-- **One-click Axiom capture** — launch Wicklapse from the Axiom Share menu on any supported token page.
-- **Automatic trade reconstruction** — detects your public Axiom trading wallets and combines buys, sells, and partial fills into one replay.
-- **Animated market charts** — choose candlestick, OHLC bar, line, or area charts with progressive, fixed, or rolling camera motion.
-- **Live performance overlays** — show running P&L, ROI, invested value, position size, execution markers, and optional average buy/sell levels.
-- **Flexible video formats** — export landscape or portrait clips for X, TikTok, Reels, Shorts, and other social platforms.
-- **Custom timing and style** — control clip duration, trade placement, themes, backgrounds, chart density, currencies, and cinematic speed changes.
-- **Built-in audio** — add synchronized buy and sell sounds or use custom audio in the full studio.
-- **Local-first rendering** — previews, uploaded media, and video exports stay in your browser.
+## Install the test build
 
-## See it in action
+1. Open `chrome://extensions` in Chrome.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Run `npm run build`, then select `Wicklapse-Unpacked` from this project.
+5. Reload any Axiom tabs that were already open when Wicklapse was installed.
+6. Open the Axiom Share dialog and choose **Create Trade Replay with Wicklapse**. The toolbar icon can open the same flow from an active Axiom page.
 
-### Landscape replay
+Instant Export automatically reads the signed-in account's public, non-archived Solana trading wallets from Axiom, combines them as one position, and sends them with the current `/meme/{pairAddress}` to Axiom's authenticated transactions feed. It does not open or scrape **My Trades**, inspect credentials, or require an RPC key. Expanded replay controls now open as an attached panel inside Axiom instead of creating a separate tab.
 
-<p align="center">
-  <img src="docs/media/rubius-replay-1.gif" alt="Wicklapse landscape trade replay" width="900" />
-</p>
+## Test the Axiom-to-video flow
 
-### Portrait replay
+1. Open an Axiom spot token page and its Share dialog.
+2. Confirm the Wicklapse entry appears once and does not interfere with Axiom's controls.
+3. Confirm Instant Export detects all public Solana trading wallets in the signed-in Axiom account without asking for wallet input.
+4. Confirm it opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill across those wallets.
+5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and Buy/Sell sound dropdown choices.
+6. Export the video and verify its duration, 1920×1080 dimensions, audio timing, running mark-to-market P&L, OHLC candles, and buy/sell markers.
+7. Expand the attached control panel and test currency, chart animation, custom clip duration, first-buy placement, and post-sell padding.
+8. Close and reopen Wicklapse to confirm the Axiom-first Instant flow remains available.
 
-<p align="center">
-  <img src="docs/media/rubius-replay-2.gif" alt="Wicklapse portrait trade replay" width="420" />
-</p>
-
-## How to use Wicklapse
-
-1. Open a token page on Axiom and make sure you are signed in.
-2. Open Axiom's **Share** menu.
-3. Select **Create Trade Replay with Wicklapse**.
-4. Wicklapse detects your public trading wallets and loads the matching executions.
-5. Preview the replay and choose the duration, aspect ratio, theme, chart style, currency, and sounds.
-6. Expand the controls for timeline placement, chart animation, average price levels, Coin ATH, backgrounds, and other advanced options.
-7. Select **Download** to render the finished video locally.
-
-## Customize every replay
-
-<p align="center">
-  <img src="docs/media/wicklapse-controls.png" alt="Wicklapse replay controls and video preview" width="100%" />
-</p>
-
-The compact panel covers the essentials without hiding the Axiom chart. Expanded controls expose the full replay editor, including chart presentation, cinematic pacing, horizontal levels, timing, audio, backgrounds, and export format.
-
-## Install from source
+## Development
 
 ```bash
-npm ci
-npm run build
+npm install
+npm run dev
 ```
 
-Then open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the generated `Wicklapse-Unpacked` folder. Reload any Axiom tabs that were already open.
+Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a regular Chrome profile.
 
-Wicklapse is an independent project and is not affiliated with or endorsed by Axiom or any other named service.
+## Test build scope
+
+- Axiom Share dialog integration
+- Automatic Axiom public-wallet discovery and batched transaction-feed lookup by current pair across multiple wallets
+- Compact-row validation, malformed-row isolation, signature deduplication, and chronological normalization
+- Automatic Axiom wallet detection with previously saved public wallets as a local fallback
+- In-page Instant Export with an expandable control panel attached to its left edge
+- Compact right-side Instant panel that leaves the Axiom chart visible and interactive instead of dimming the entire page
+- Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
+- Axiom `pair-chart-v3` candles with native dynamic intervals, GeckoTerminal fallback, and execution-path fallback
+- Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels
+- Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
+- Expanded-panel chart motion modes: progressive auto-fit (default), rolling follow, and a fixed full-timeline camera
+- Optional horizontal Average Buy and Average Sell levels that recalculate on every execution, plus a truthful Axiom ATH overlay that becomes a line only when the clip reaches ATH and otherwise stays as a top-edge value badge
+- Custom fractional video duration and lead/tail placement backed by real market history—for example, first buy at 3s and final sell at 7s in a 10s clip; clear either padding field to restore Auto
+- Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
+- Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade
+- Sparse-market OHLC recovery with empty-interval fills and progressively coarser provider-supported retries
+- Race-safe candle switching so an older response can never overwrite the newest selection
+- Automatic preview restart from 0:00 after duration, candle, theme, currency, audio, aspect, quality, background, or other studio configuration changes
+- Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
+- Timeline-synchronized bundled Buy/Sell sounds with partial fills consolidated to the same audible event as their visible marker
+- Thirteen bundled Buy/Sell presets—including Hitmarker, Apple Pay, Cash Register, GTA Pickup, Mario Coin, Pop, and Gaming Punch—available by default in both dropdowns
+- Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
+- SOL/USD presentation
+- Local canvas preview and video export
+
+## Current first-build limitations
+
+- Exact executions and automatic wallet discovery depend on the signed-in Axiom session and the stability of Axiom's wallet and `transactions-feed-v4` endpoints; provider-specific payloads remain isolated from the replay UI.
+- Token symbol, mint, image, and optional P&L summary still come from the active Axiom coin page. Chart DOM data is not read.
+- Market candles use Axiom `pair-chart-v3` first and GeckoTerminal second; otherwise the renderer labels and uses the execution-price path rather than inventing candles. Historical market-cap scaling still depends on GeckoTerminal and may fall back to pool FDV.
+- USD display uses the current SOL/USD rate rather than the historical rate at each fill.
+- Additional expanded-panel controls—including custom media uploads and privacy presentation—will move into the in-page workflow in later builds.
+- Export uses MP4/H.264 when the browser exposes that encoder and otherwise downloads WebM/VP9.
+- Export is rendered in real time in this build, so a 15-second replay takes about 15 seconds to produce.

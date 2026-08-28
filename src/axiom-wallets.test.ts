@@ -26,6 +26,23 @@ describe("Axiom wallet discovery", () => {
     expect(JSON.stringify(parsed)).not.toContain("bundleKey");
   });
 
+  it("parses Axiom's compact wallet rows without retaining its bundle key", () => {
+    const parsed = parseAxiomPublicWallets({
+      bundleKey: "must-never-leave-the-parser",
+      wallets: [
+        [primaryWallet, "sol", 1, 0, "2026-08-10T16:07:17.604Z", "Axiom Main", "derivation-path"],
+        ["0x3617ec647de35ff49580242c79d32d7a535169a0", "evm", 1, 0, "2026-08-10T16:07:17.604Z", "Axiom Main", "derivation-path"],
+        [archivedWallet, "sol", 0, 1, "2026-08-16T22:23:47.216Z", "Archived", "imported"],
+        [secondWallet, "sol", 0, 0, "2026-08-19T19:01:01.812Z", "Wallet", "imported"],
+      ],
+    });
+    expect(parsed).toEqual([
+      { address: primaryWallet, isPrimary: true, name: "Axiom Main" },
+      { address: secondWallet, isPrimary: false, name: "Wallet" },
+    ]);
+    expect(JSON.stringify(parsed)).not.toContain("must-never-leave-the-parser");
+  });
+
   it("requests the signed-in Axiom wallet list without manually supplying credentials", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       wallets: [

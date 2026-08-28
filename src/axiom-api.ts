@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { browser } from "wxt/browser";
 import { SolanaAddressSchema, TradeExecutionSchema, type TradeExecution } from "./domain";
 
 export const AXIOM_TRANSACTIONS_FEED_URL = "https://api3.axiom.trade/transactions-feed-v4";
@@ -148,25 +149,30 @@ export async function fetchAxiomExecutions(
     const bySignature = new Map<string, TradeExecution>();
     for (let start = 0; start < walletAddresses.length; start += WALLETS_PER_REQUEST) {
       const batch = walletAddresses.slice(start, start + WALLETS_PER_REQUEST);
-      const response = await (options.fetchImpl ?? fetch)(AXIOM_TRANSACTIONS_FEED_URL, {
-        method: "POST",
-        credentials: "include",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pairAddress,
-          orderBy: "DESC",
-          makerAddress: batch.join(","),
-          v: (options.now ?? Date.now)(),
-        }),
-        signal: controller.signal,
-      });
-      if (response.status === 401 || response.status === 403) {
+      const body = {
+        pairAddress,
+        orderBy: "DESC",
+        makerAddress: batch.join(","),
+        v: (options.now ?? Date.now)(),
+      };
+      const runsInAxiomPage = !options.fetchImpl && typeof window !== "undefined" && window.location.protocol.startsWith("http");
+      const result: { ok?: boolean; status?: number; payload?: unknown; error?: string } | undefined = runsInAxiomPage
+        ? await browser.runtime.sendMessage({ type: "WICKLAPSE_FETCH_AXIOM_EXECUTIONS", body }) as { ok?: boolean; status?: number; payload?: unknown; error?: string } | undefined
+        : await (options.fetchImpl ?? fetch)(AXIOM_TRANSACTIONS_FEED_URL, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          }).then(async (response) => ({ ok: response.ok, status: response.status, payload: await response.json() }));
+      if (!result) throw new Error("The extension background returned no Axiom trade data.");
+      if (result.error) throw new Error(`Axiom trade lookup failed: ${result.error}`);
+      if (result.status === 401 || result.status === 403) {
         throw new Error("Axiom rejected the trade lookup. Sign in to Axiom again and retry.");
       }
-      if (response.status === 429) throw new Error("Axiom is rate-limiting trade lookups. Wait a moment and retry.");
-      if (!response.ok) throw new Error(`Axiom trade lookup returned HTTP ${response.status}.`);
-      for (const execution of parseAxiomTransactionsResponse(await response.json(), { pairAddress, walletAddresses: batch })) {
+      if (result.status === 429) throw new Error("Axiom is rate-limiting trade lookups. Wait a moment and retry.");
+      if (!result.ok) throw new Error(`Axiom trade lookup returned HTTP ${result.status ?? 0}.`);
+      for (const execution of parseAxiomTransactionsResponse(result.payload, { pairAddress, walletAddresses: batch })) {
         if (!bySignature.has(execution.signature)) bySignature.set(execution.signature, execution);
       }
     }

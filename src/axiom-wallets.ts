@@ -1,5 +1,6 @@
 import { SolanaAddressSchema } from "./domain";
 import { normalizeWalletAddresses } from "./axiom-api";
+import { browser } from "wxt/browser";
 
 export const AXIOM_WALLETS_URL = "https://api.axiom.trade/bundle-key-and-wallets-v2";
 
@@ -31,18 +32,27 @@ export function parseAxiomPublicWallets(payload: unknown): AxiomPublicWallet[] {
   for (const row of walletRows(payload)) {
     if (!row || typeof row !== "object") continue;
     const record = row as Record<string, unknown>;
-    if (record.network !== "sol" || record.isArchived === true) continue;
-    const candidate = typeof record.walletAddress === "string"
-      ? record.walletAddress
-      : typeof record.publicKey === "string"
-        ? record.publicKey
-        : null;
+    const compact = Array.isArray(row) ? row : null;
+    const network = compact ? compact[1] : record.network;
+    const isArchived = compact ? compact[3] === 1 : record.isArchived === true;
+    if (network !== "sol" || isArchived) continue;
+    const candidate = compact && typeof compact[0] === "string"
+      ? compact[0]
+      : typeof record.walletAddress === "string"
+        ? record.walletAddress
+        : typeof record.publicKey === "string"
+          ? record.publicKey
+          : null;
     if (!candidate || !SolanaAddressSchema.safeParse(candidate).success) continue;
     if (!byAddress.has(candidate)) {
       byAddress.set(candidate, {
         address: candidate,
-        isPrimary: record.isPrimary === true,
-        name: typeof record.name === "string" && record.name.trim() ? record.name.trim().slice(0, 80) : null,
+        isPrimary: compact ? compact[2] === 1 : record.isPrimary === true,
+        name: compact && typeof compact[5] === "string" && compact[5].trim()
+          ? compact[5].trim().slice(0, 80)
+          : typeof record.name === "string" && record.name.trim()
+            ? record.name.trim().slice(0, 80)
+            : null,
       });
     }
   }
@@ -57,19 +67,23 @@ export async function fetchAxiomWalletAddresses(
   options.signal?.addEventListener("abort", abortFromCaller, { once: true });
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const response = await (options.fetchImpl ?? fetch)(AXIOM_WALLETS_URL, {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      signal: controller.signal,
-    });
-    if (response.status === 401 || response.status === 403) {
+    const runsInAxiomPage = !options.fetchImpl && typeof window !== "undefined" && window.location.protocol.startsWith("http");
+    const result: { ok?: boolean; status?: number; payload?: unknown; error?: string } | undefined = runsInAxiomPage
+      ? await browser.runtime.sendMessage({ type: "WICKLAPSE_FETCH_AXIOM_WALLETS" }) as { ok?: boolean; status?: number; payload?: unknown; error?: string } | undefined
+      : await (options.fetchImpl ?? fetch)(AXIOM_WALLETS_URL, {
+          method: "POST",
+          credentials: "include",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          signal: controller.signal,
+        }).then(async (response) => ({ ok: response.ok, status: response.status, payload: await response.json() }));
+    if (!result) throw new Error("The extension background returned no wallet data.");
+    if (result.error) throw new Error(`Axiom wallet lookup failed: ${result.error}`);
+    if (result.status === 401 || result.status === 403) {
       throw new Error("Axiom could not identify the signed-in trading wallets. Sign in again and retry.");
     }
-    if (response.status === 429) throw new Error("Axiom is rate-limiting wallet detection. Wait a moment and retry.");
-    if (!response.ok) throw new Error(`Axiom wallet lookup returned HTTP ${response.status}.`);
-    return normalizeWalletAddresses(parseAxiomPublicWallets(await response.json()).map((wallet) => wallet.address));
+    if (result.status === 429) throw new Error("Axiom is rate-limiting wallet detection. Wait a moment and retry.");
+    if (!result.ok) throw new Error(`Axiom wallet lookup returned HTTP ${result.status ?? 0}.`);
+    return normalizeWalletAddresses(parseAxiomPublicWallets(result.payload).map((wallet) => wallet.address));
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError" && !options.signal?.aborted) {
       throw new Error("Axiom wallet detection timed out after 15 seconds.");

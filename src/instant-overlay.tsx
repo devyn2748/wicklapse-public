@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
-import { fetchAxiomExecutions } from "./axiom-api";
+import { fetchAxiomExecutions, normalizeWalletAddresses } from "./axiom-api";
 import { fetchAxiomWalletAddresses } from "./axiom-wallets";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
@@ -174,12 +174,14 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
   const replayRequestRef = useRef(new LatestReplayRequest());
   const [status, setStatus] = useState("Preparing Wicklapse…");
   const [error, setError] = useState("");
+  const [fallbackWalletInput, setFallbackWalletInput] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   const buildCapturedReplay = useCallback(async (
     candleInterval: CandleIntervalPreference = "auto",
     timelineOptions?: { duration: number; leadSeconds: number | null; trailSeconds: number | null },
+    manualWallets: string[] = [],
   ) => {
     const request = replayRequestRef.current.begin();
     setError("");
@@ -195,13 +197,13 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
       try {
         detectedWallets = await fetchAxiomWalletAddresses({ signal: request.signal });
       } catch (caught) {
-        if (!savedWallets.length) throw caught;
+        if (!savedWallets.length && !manualWallets.length) throw caught;
       }
-      const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
+      const walletAddresses = [...new Set([...detectedWallets, ...savedWallets, ...manualWallets])];
       if (!walletAddresses.length) {
         throw new Error("Axiom did not expose any Solana trading wallets. Confirm a public trading wallet is active in Axiom, then try again.");
       }
-      if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
+      if (detectedWallets.length || manualWallets.length) await saveTradingWalletAddresses(walletAddresses);
       setStatus(`Retrieving executions across ${walletAddresses.length} Axiom wallet${walletAddresses.length === 1 ? "" : "s"}…`);
       const tradeExecutions = await fetchAxiomExecutions(
         { pairAddress: context.pairAddress, walletAddresses },
@@ -416,7 +418,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
 
         {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>Axiom trade capture and rendering remain on this device.</p></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><div><button type="button" className="wick-primary" onClick={onClose}>Close</button><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Try again</button></div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label><div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button><button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button></div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
