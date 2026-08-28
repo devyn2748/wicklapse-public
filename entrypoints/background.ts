@@ -3,13 +3,51 @@ import { browser } from "wxt/browser";
 const marketRequests = new Map<string, AbortController>();
 const PUBLIC_MARKET_HOSTS = new Set(["api.geckoterminal.com", "api.coingecko.com"]);
 
+type AxiomJsonResult = { ok: boolean; status?: number; payload?: unknown; error?: string };
+
+/** Runs in Axiom's main-world page context, preserving the signed-in session. */
+async function fetchAxiomJsonInPage(url: string, body?: Record<string, unknown>): Promise<AxiomJsonResult> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Preserve an unsuccessful HTTP status for the extension UI.
+    }
+    return { ok: response.ok, status: response.status, payload };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "The Axiom request failed." };
+  }
+}
+
 async function fetchAxiomJson(message: {
   kind: "wallets" | "executions";
   body?: Record<string, unknown>;
-}): Promise<{ ok: boolean; status?: number; payload?: unknown; error?: string }> {
+}, tabId?: number): Promise<AxiomJsonResult> {
   const url = message.kind === "wallets"
     ? "https://api.axiom.trade/bundle-key-and-wallets-v2"
     : "https://api3.axiom.trade/transactions-feed-v4";
+  if (tabId) {
+    try {
+      const [injected] = await browser.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: fetchAxiomJsonInPage,
+        args: [url, message.kind === "executions" ? message.body : undefined],
+      });
+      if (injected?.result) return injected.result as AxiomJsonResult;
+      return { ok: false, error: "Axiom returned no data from the active page." };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Wicklapse could not query the active Axiom page." };
+    }
+  }
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -167,20 +205,20 @@ export default defineBackground(() => {
       await openInstantOnAxiom(axiomTab);
     }).catch(() => undefined);
   });
-  browser.runtime.onMessage.addListener((message: unknown) => {
+  browser.runtime.onMessage.addListener((message: unknown, sender) => {
     if (!message || typeof message !== "object" || !("type" in message)) return undefined;
     if (message.type === "WICKLAPSE_REFRESH_AXIOM_TRADE") {
       const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
       return refreshAxiomTrade(pairAddress);
     }
     if (message.type === "WICKLAPSE_FETCH_AXIOM_WALLETS") {
-      return fetchAxiomJson({ kind: "wallets" });
+      return fetchAxiomJson({ kind: "wallets" }, sender.tab?.id);
     }
     if (
       message.type === "WICKLAPSE_FETCH_AXIOM_EXECUTIONS" &&
       "body" in message && message.body && typeof message.body === "object"
     ) {
-      return fetchAxiomJson({ kind: "executions", body: message.body as Record<string, unknown> });
+      return fetchAxiomJson({ kind: "executions", body: message.body as Record<string, unknown> }, sender.tab?.id);
     }
     if (
       message.type === "WICKLAPSE_FETCH_MARKET_JSON" &&

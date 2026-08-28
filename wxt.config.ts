@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: {
     name: "Wicklapse",
     description: "Turn a selected Axiom trade into a local animated trade replay.",
-    permissions: ["storage"],
+    permissions: ["storage", "scripting"],
     host_permissions: [
       "https://axiom.trade/*",
       "https://*.axiom.trade/*",
