@@ -93,6 +93,23 @@ export function buildTradeEpisodes(fills: TradeFill[], context: ShareContext): T
     .sort((a, b) => b.matchScore - a.matchScore || b.endTimestamp - a.endTimestamp);
 }
 
+/**
+ * Prefer the active position; otherwise replay the latest completed position.
+ * Match scores are useful for diagnostics, but must not make an older cycle
+ * replace the trader's current or most recent activity.
+ */
+export function selectCurrentTradeEpisode(episodes: TradeEpisode[]): TradeEpisode | null {
+  const candidates = episodes.filter((episode) => episode.status === "open");
+  const source = candidates.length ? candidates : episodes;
+  return source.reduce<TradeEpisode | null>((latest, episode) => {
+    if (!latest) return episode;
+    return episode.endTimestamp > latest.endTimestamp
+      || (episode.endTimestamp === latest.endTimestamp && episode.startTimestamp > latest.startTimestamp)
+      ? episode
+      : latest;
+  }, null);
+}
+
 export function buildReplayPoints(episode: TradeEpisode): ReplayPoint[] {
   const points: ReplayPoint[] = [];
   let cashFlow = new Decimal(0);

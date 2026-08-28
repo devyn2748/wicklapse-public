@@ -4,6 +4,7 @@ import { fetchAxiomExecutions, normalizeWalletAddresses } from "./axiom-api";
 import { fetchAxiomWalletAddresses } from "./axiom-wallets";
 import { buildAxiomExecutionEpisodes } from "./axiom-capture";
 import { type ReplaySpec, type ShareContext } from "./domain";
+import { selectCurrentTradeEpisode } from "./episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
 import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName } from "./renderer";
@@ -222,7 +223,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
       await saveShareContext(enrichedContext);
       setReplayContext(enrichedContext);
       const episodes = buildAxiomExecutionEpisodes(enrichedContext);
-      const episode = episodes[0];
+      const episode = selectCurrentTradeEpisode(episodes);
       if (!episode) {
         throw new Error("No replayable buys or sells were found across the detected Axiom wallet(s).");
       }

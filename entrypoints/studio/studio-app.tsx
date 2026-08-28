@@ -21,7 +21,7 @@ import {
 import { normalizeWalletAddresses } from "../../src/axiom-api";
 import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
-import { buildTradeEpisodes, solFromLamports } from "../../src/episodes";
+import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
 import { drawReplayFrame, type ChartAnimation, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
@@ -564,7 +564,7 @@ export function StudioApp(): JSX.Element {
     }
     setContext(sourceContext);
     setEpisodes(candidates);
-    setSelectedEpisodeId(candidates[0]!.id);
+    setSelectedEpisodeId(selectCurrentTradeEpisode(candidates)!.id);
     setStage("confirm");
   };
 
@@ -607,7 +607,7 @@ export function StudioApp(): JSX.Element {
       const candidates = buildTradeEpisodes(fills, baseContext);
       if (!candidates.length) throw new Error("No complete trade episode could be reconstructed from the matching fills.");
       setEpisodes(candidates);
-      setSelectedEpisodeId(candidates[0]!.id);
+      setSelectedEpisodeId(selectCurrentTradeEpisode(candidates)!.id);
       setStage("confirm");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Trade lookup failed.");

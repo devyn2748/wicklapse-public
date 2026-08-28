@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTradeEpisodes } from "./episodes";
+import { buildTradeEpisodes, selectCurrentTradeEpisode } from "./episodes";
 import type { ShareContext, TradeFill } from "./domain";
 
 const testTokenMint = "3".repeat(44);
@@ -53,6 +53,31 @@ describe("buildTradeEpisodes", () => {
     expect(episodes).toHaveLength(2);
     expect(episodes.some((episode) => episode.status === "closed")).toBe(true);
     expect(episodes.some((episode) => episode.status === "open")).toBe(true);
+  });
+
+  it("selects the active position instead of an older higher-scoring closed cycle", () => {
+    const episodes = buildTradeEpisodes(
+      [
+        fill({ signature: "first-buy-000000000", side: "buy" }),
+        fill({ signature: "first-sell-00000000", side: "sell", quoteLamports: "3000000000", walletPostTokenRaw: "0" }),
+        fill({ signature: "second-buy-00000000", side: "buy", timestamp: 1_700_000_300 }),
+      ],
+      context,
+    );
+    expect(selectCurrentTradeEpisode(episodes)?.fills.map((item) => item.signature)).toEqual(["second-buy-00000000"]);
+  });
+
+  it("selects the newest closed cycle when there is no active position", () => {
+    const episodes = buildTradeEpisodes(
+      [
+        fill({ signature: "first-buy-000000000", side: "buy", timestamp: 100 }),
+        fill({ signature: "first-sell-00000000", side: "sell", timestamp: 200, walletPostTokenRaw: "0" }),
+        fill({ signature: "second-buy-00000000", side: "buy", timestamp: 300 }),
+        fill({ signature: "second-sell-000000", side: "sell", timestamp: 400, walletPostTokenRaw: "0" }),
+      ],
+      context,
+    );
+    expect(selectCurrentTradeEpisode(episodes)?.fills.map((item) => item.signature)).toEqual(["second-buy-00000000", "second-sell-000000"]);
   });
 
   it("gives the reconciled episode an exact-match score", () => {
