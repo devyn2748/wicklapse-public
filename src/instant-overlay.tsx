@@ -16,9 +16,9 @@ import {
   saveTradingWalletAddresses,
 } from "./storage";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
-import logoUrl from "../assets/icon.png";
 
 const WICKLAPSE_VERSION = browser.runtime.getManifest().version;
+const logoUrl = browser.runtime.getURL("/icon.png");
 
 interface InstantOverlayProps {
   context: ShareContext;

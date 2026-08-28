@@ -40,7 +40,7 @@ import {
 import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "../../src/studio-settings";
 
 type Stage = "connect" | "confirm" | "studio";
-const DEMO_MINT = "CybrLeek1111111111111111111111111111111111";
+const DEMO_MINT = "3".repeat(44);
 
 function demoFill(index: number, side: "buy" | "sell", quoteSol: string, price: string): TradeFill {
   const isLast = index === 7;
@@ -90,7 +90,7 @@ function makeDemoSpec(): ReplaySpec {
     id: "demo-replay",
     symbol: "CYBERLEEK",
     tokenMint: DEMO_MINT,
-    walletAddress: "9LpWicklapseDemoWallet111111111111111111aBU",
+    walletAddress: "4".repeat(44),
     capturedAt: Date.now(),
     episode,
     points: [
@@ -790,7 +790,7 @@ export function StudioApp(): JSX.Element {
           {stage === "confirm" && <>Connect <span>→</span> <b>2</b> Confirm <span>→</span> Customize</>}
           {stage === "studio" && <>{spec?.symbol ?? "Trade Replay"} <span>·</span> Saved locally</>}
         </div>
-        <div className="status-chip"><i /> Local-first test build</div>
+        <div className="status-chip"><i /> Local-first</div>
       </header>
 
       {stage === "connect" && (

@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RpcSettings } from "./domain";
 import { findWalletTradeFills, parseTradeFill } from "./rpc";
 
-const wallet = "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY";
-const mint = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6wk43kshGZJgFhAM";
+const wallet = "7".repeat(44);
+const mint = "8".repeat(44);
+const tokenAccount = "9".repeat(44);
 
 function transaction(options: {
   preLamports: number;
@@ -118,7 +119,7 @@ describe("findWalletTradeFills", () => {
 
         let result: unknown;
         if (request.method === "getTokenAccountsByOwner") {
-          result = { value: [{ pubkey: "TokenAccount11111111111111111111111111111" }] };
+          result = { value: [{ pubkey: tokenAccount }] };
         } else if (request.method === "getSignaturesForAddress") {
           result = [
             { signature: "buy-signature", slot: 1, err: null, blockTime: 1_700_000_000 },
@@ -159,6 +160,6 @@ describe("findWalletTradeFills", () => {
 
     expect(fills.map((fill) => fill.side)).toEqual(["buy", "sell"]);
     expect(methods.some(({ method, address }) => method === "getSignaturesForAddress" && address === wallet)).toBe(false);
-    expect(methods.some(({ method, address }) => method === "getSignaturesForAddress" && address?.startsWith("TokenAccount"))).toBe(true);
+    expect(methods.some(({ method, address }) => method === "getSignaturesForAddress" && address === tokenAccount)).toBe(true);
   });
 });

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildTradeEpisodes } from "./episodes";
 import type { ShareContext, TradeFill } from "./domain";
 
+const testTokenMint = "3".repeat(44);
+
 const context: ShareContext = {
   id: "capture-1",
   capturedAt: 1_700_000_200_000,
-  pageUrl: "https://axiom.trade/t/TokenMint111111111111111111111111111111",
-  tokenMint: "TokenMint111111111111111111111111111111",
+  pageUrl: `https://axiom.trade/t/${testTokenMint}`,
+  tokenMint: testTokenMint,
   pairAddress: null,
   symbol: "TEST",
   tokenName: "Test Token",

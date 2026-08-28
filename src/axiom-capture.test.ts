@@ -19,8 +19,8 @@ describe("buildAxiomCaptureEpisodes", () => {
     const context: ShareContext = {
       id: "axiom-capture",
       capturedAt: 1_800_000_000_000,
-      pageUrl: "https://axiom.trade/meme/Pair1111111111111111111111111111111111111",
-      tokenMint: "Mint1111111111111111111111111111111111111",
+      pageUrl: `https://axiom.trade/meme/${pairAddress}`,
+      tokenMint: "3".repeat(44),
       pairAddress,
       symbol: "TEST",
       tokenName: "Test",

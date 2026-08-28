@@ -2,13 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
 import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, LatestReplayRequest, selectCandleRequest } from "./replay-project";
 
+const testTokenMint = "3".repeat(44);
+
 const fills: TradeFill[] = [
   {
     signature: "buy-signature",
     slot: 1,
     timestamp: 1_700_000_000,
     side: "buy",
-    tokenMint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6wk43kshGZgFhAM",
+    tokenMint: testTokenMint,
     tokenDecimals: 6,
     tokenAmountRaw: "1000000",
     quoteLamports: "1000000000",
@@ -21,7 +23,7 @@ const fills: TradeFill[] = [
     slot: 2,
     timestamp: 1_700_000_300,
     side: "sell",
-    tokenMint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6wk43kshGZgFhAM",
+    tokenMint: testTokenMint,
     tokenDecimals: 6,
     tokenAmountRaw: "1000000",
     quoteLamports: "3000000000",

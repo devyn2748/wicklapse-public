@@ -8,7 +8,7 @@ function fill(signature: string, side: "buy" | "sell", timestamp: number, amount
     slot: timestamp,
     timestamp,
     side,
-    tokenMint: "Token1111111111111111111111111111111111111",
+    tokenMint: "3".repeat(44),
     tokenDecimals: 0,
     tokenAmountRaw: amount,
     quoteLamports: "1",

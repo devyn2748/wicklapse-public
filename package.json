@@ -1,12 +1,18 @@
 {
   "name": "wicklapse-extension",
   "version": "0.9.14",
+  "description": "A local-first Chrome extension for turning Axiom trades into animated replay videos.",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "wxt prepare",
     "dev": "wxt",
     "check": "npm run typecheck && npm test",
     "build": "npm run check && wxt build && node scripts/sync-unpacked.mjs",
+    "public:audit": "node scripts/audit-public.mjs",
+    "public:history-check": "node scripts/audit-public.mjs --history",
+    "release:check": "npm run public:audit && npm run check && wxt build",
     "zip": "wxt zip",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

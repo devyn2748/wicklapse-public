@@ -151,6 +151,7 @@ export async function fetchAxiomExecutions(
       const response = await (options.fetchImpl ?? fetch)(AXIOM_TRANSACTIONS_FEED_URL, {
         method: "POST",
         credentials: "include",
+        cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pairAddress,

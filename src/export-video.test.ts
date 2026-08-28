@@ -7,7 +7,7 @@ const fill = (signature: string, timestamp: number, side: "buy" | "sell"): Trade
   slot: timestamp,
   timestamp,
   side,
-  tokenMint: "Token1111111111111111111111111111111111111",
+  tokenMint: "3".repeat(44),
   tokenDecimals: 6,
   tokenAmountRaw: "1000000",
   quoteLamports: "10000000",
