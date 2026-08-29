@@ -3,6 +3,10 @@ import type { ReplayPoint, ShareContext, TradeEpisode, TradeFill } from "./domai
 
 const LAMPORTS = new Decimal(1_000_000_000);
 
+function quoteScaleOf(fillOrEpisode: Pick<TradeFill, "quoteScale"> | Pick<TradeEpisode, "quoteScale">): Decimal {
+  return new Decimal(fillOrEpisode.quoteScale || LAMPORTS);
+}
+
 function sumLamports(fills: TradeFill[], side: "buy" | "sell"): Decimal {
   return fills
     .filter((fill) => fill.side === side)
@@ -27,9 +31,10 @@ function relativeMatch(actual: Decimal, expectedText: string | null, weight: num
 }
 
 export function scoreEpisode(episode: TradeEpisode, context: ShareContext): number {
-  const bought = new Decimal(episode.totalBoughtLamports).div(LAMPORTS);
-  const sold = new Decimal(episode.totalSoldLamports).div(LAMPORTS);
-  const pnl = new Decimal(episode.approximatePnlLamports).div(LAMPORTS);
+  const scale = quoteScaleOf(episode);
+  const bought = new Decimal(episode.totalBoughtLamports).div(scale);
+  const sold = new Decimal(episode.totalSoldLamports).div(scale);
+  const pnl = new Decimal(episode.approximatePnlLamports).div(scale);
   let score = 20; // Exact mint is required before an episode reaches this function.
   score += relativeMatch(bought, context.boughtSol, 24);
   score += relativeMatch(sold, context.soldSol, 24);
@@ -70,6 +75,8 @@ export function buildTradeEpisodes(fills: TradeFill[], context: ShareContext): T
       const last = episodeFills.at(-1)!;
       const status = last.walletPostTokenRaw === "0" ? "closed" : "open";
       const approximatePnl = sold.minus(bought).minus(fees);
+      const quoteCurrency = episodeFills[0]!.quoteCurrency ?? "SOL";
+      const quoteScale = episodeFills[0]!.quoteScale ?? LAMPORTS.toFixed(0);
       const episode: TradeEpisode = {
         id: `${episodeFills[0]!.signature.slice(0, 12)}-${index}`,
         tokenMint: episodeFills[0]!.tokenMint,
@@ -83,6 +90,8 @@ export function buildTradeEpisodes(fills: TradeFill[], context: ShareContext): T
         remainingTokenRaw: last.walletPostTokenRaw,
         tokenDecimals: last.tokenDecimals,
         approximatePnlLamports: approximatePnl.toFixed(0),
+        quoteCurrency,
+        quoteScale,
         matchScore: 0,
         matchLabel: "Possible match",
       };
@@ -117,7 +126,8 @@ export function buildReplayPoints(episode: TradeEpisode): ReplayPoint[] {
   let fees = new Decimal(0);
   const chronological = [...episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot || left.signature.localeCompare(right.signature));
   for (const fill of chronological) {
-    const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
+    const scale = quoteScaleOf(fill);
+    const quote = new Decimal(fill.quoteLamports).div(scale);
     const tokenAmount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
     if (fill.side === "buy") {
       cashFlow = cashFlow.minus(quote);
@@ -126,7 +136,7 @@ export function buildReplayPoints(episode: TradeEpisode): ReplayPoint[] {
       cashFlow = cashFlow.plus(quote);
       holdings = Decimal.max(0, holdings.minus(tokenAmount));
     }
-    fees = fees.plus(new Decimal(fill.networkFeeLamports).div(LAMPORTS));
+    fees = fees.plus(new Decimal(fill.networkFeeLamports).div(scale));
     const executionPrice = new Decimal(fill.estimatedPriceSol || 0);
     points.push({
       timestamp: fill.timestamp,

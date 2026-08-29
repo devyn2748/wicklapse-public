@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, LatestReplayRequest, selectCandleRequest } from "./replay-project";
+import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, LatestReplayRequest, selectCandleRequest, selectFocusedFomoCandles } from "./replay-project";
 
 const testTokenMint = "3".repeat(44);
 
@@ -92,6 +92,13 @@ describe("createReplaySpec", () => {
     expect(selectCandleRequest(30 * 60, "auto").interval).toBe(15);
     expect(selectCandleRequest(300, "5s").interval).toBe(5);
     expect(selectCandleRequest(3_600, "1m").interval).toBe(60);
+  });
+
+  it("never falls back to Fomo's complete UI chart range", () => {
+    const candle = (timestamp: number) => ({ timestamp, openSol: "1", highSol: "2", lowSol: "0.5", closeSol: "1", volume: "1" });
+    const allRange = [candle(100), candle(200), candle(300), candle(400), candle(500), candle(600), candle(700)];
+    expect(selectFocusedFomoCandles(allRange, 390, 410).map((item) => item.timestamp)).toEqual([200, 300, 400, 500]);
+    expect(selectFocusedFomoCandles(allRange, 190, 510).map((item) => item.timestamp)).toEqual([200, 300, 400, 500]);
   });
 
   it("safely coarsens an override that would truncate a long position", () => {

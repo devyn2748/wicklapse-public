@@ -54,6 +54,10 @@ export function buildAxiomExecutionEpisodes(context: ShareContext): TradeEpisode
       wallet: execution.wallet,
       pairAddress: execution.pairAddress,
       source: "axiom",
+      chainId: execution.chainId ?? "solana",
+      providerTradeId: execution.providerTradeId,
+      quoteCurrency: execution.quoteCurrency ?? "SOL",
+      quoteScale: execution.quoteScale ?? LAMPORTS.toFixed(0),
     };
   });
 

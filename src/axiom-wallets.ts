@@ -33,21 +33,23 @@ export function parseAxiomPublicWallets(payload: unknown): AxiomPublicWallet[] {
     if (!row || typeof row !== "object") continue;
     const record = row as Record<string, unknown>;
     const compact = Array.isArray(row) ? row : null;
-    const network = compact ? compact[1] : record.network;
-    const isArchived = compact ? compact[3] === 1 : record.isArchived === true;
-    if (network !== "sol" || isArchived) continue;
+    const rawNetwork = compact ? compact[1] : record.network ?? record.chain;
+    const network = typeof rawNetwork === "string" ? rawNetwork.toLowerCase() : rawNetwork;
+    if (network !== "sol" && network !== "solana") continue;
     const candidate = compact && typeof compact[0] === "string"
       ? compact[0]
       : typeof record.walletAddress === "string"
         ? record.walletAddress
         : typeof record.publicKey === "string"
           ? record.publicKey
+          : typeof record.address === "string"
+            ? record.address
           : null;
     if (!candidate || !SolanaAddressSchema.safeParse(candidate).success) continue;
     if (!byAddress.has(candidate)) {
       byAddress.set(candidate, {
         address: candidate,
-        isPrimary: compact ? compact[2] === 1 : record.isPrimary === true,
+        isPrimary: compact ? compact[2] === 1 : record.isPrimary === true || record.isDefault === true,
         name: compact && typeof compact[5] === "string" && compact[5].trim()
           ? compact[5].trim().slice(0, 80)
           : typeof record.name === "string" && record.name.trim()

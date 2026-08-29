@@ -19,8 +19,8 @@ import {
   type TradeFill,
 } from "../../src/domain";
 import { normalizeWalletAddresses } from "../../src/axiom-api";
-import { buildAxiomExecutionEpisodes } from "../../src/axiom-capture";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
+import { buildProviderExecutionEpisodes } from "../../src/provider-capture";
 import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
@@ -425,7 +425,7 @@ export function StudioApp(): JSX.Element {
         setMint(project.shareContext.tokenMint ?? "");
         setSpec(project.replaySpec);
         const restoredEpisodes = project.shareContext.tradeExecutions?.length
-          ? buildAxiomExecutionEpisodes(project.shareContext)
+          ? buildProviderExecutionEpisodes(project.shareContext)
           : [project.replaySpec.episode];
         setEpisodes(restoredEpisodes.length ? restoredEpisodes : [project.replaySpec.episode]);
         setSelectedEpisodeId(project.selectedEpisodeId ?? project.replaySpec.episode.id);
@@ -515,24 +515,27 @@ export function StudioApp(): JSX.Element {
 
   const findTrade = async () => {
     setError("");
+    const provider = context?.provider === "fomo" ? "fomo" : "axiom";
     const fallbackWallets = normalizeWalletAddresses([walletInput]);
-    if (fallbackWallets.length) await saveTradingWalletAddresses(fallbackWallets);
+    if (provider === "axiom" && fallbackWallets.length) await saveTradingWalletAddresses(fallbackWallets);
     let resolvedContext = context;
-    if (context?.pairAddress) {
+    if (context?.pairAddress || provider === "fomo") {
       setBusy(true);
-      setProgressMessage("Detecting Axiom wallets and retrieving exact executions…");
+      setProgressMessage(`Retrieving the latest ${provider === "fomo" ? "Fomo" : "Axiom"} executions…`);
       try {
         const response = await browser.runtime.sendMessage({
-          type: "WICKLAPSE_REFRESH_AXIOM_TRADE",
+          type: "WICKLAPSE_REFRESH_TRADE",
+          provider,
           pairAddress: context?.pairAddress ?? null,
+          providerTradeId: context?.providerTradeId ?? null,
         }) as { ok?: boolean; context?: unknown; error?: string };
-        if (!response?.ok) throw new Error(response?.error ?? "Axiom trade lookup failed.");
+        if (!response?.ok) throw new Error(response?.error ?? `${provider === "fomo" ? "Fomo" : "Axiom"} trade lookup failed.`);
         const parsedContext = ShareContextSchema.safeParse(response.context);
-        if (!parsedContext.success) throw new Error("Axiom returned trade data in an unsupported format.");
+        if (!parsedContext.success) throw new Error(`${provider === "fomo" ? "Fomo" : "Axiom"} returned trade data in an unsupported format.`);
         resolvedContext = parsedContext.data;
       } catch (caught) {
         if (!resolvedContext?.tradeExecutions?.length) {
-          setError(caught instanceof Error ? caught.message : "Axiom trade lookup failed.");
+          setError(caught instanceof Error ? caught.message : "Trade lookup failed.");
           return;
         }
       } finally {
@@ -541,25 +544,24 @@ export function StudioApp(): JSX.Element {
       }
     }
     if (!resolvedContext?.tradeExecutions?.length) {
-      setError("No trades found across the detected Axiom wallet(s) on this token.");
+      setError("No executions were found for this trade.");
       return;
     }
-    const walletAddresses = normalizeWalletAddresses([
+    const walletAddresses = provider === "axiom" ? normalizeWalletAddresses([
       ...(resolvedContext.walletAddresses ?? []),
       ...resolvedContext.tradeExecutions.map((execution) => execution.wallet),
       ...fallbackWallets,
-    ]);
-    const matchingExecutions = resolvedContext.tradeExecutions.filter((execution) => walletAddresses.includes(execution.wallet));
-    const sourceContext: ShareContext = {
+    ]) : [];
+    const sourceContext: ShareContext = provider === "axiom" ? {
       ...resolvedContext,
-      tradeExecutions: matchingExecutions,
+      tradeExecutions: resolvedContext.tradeExecutions.filter((execution) => walletAddresses.includes(execution.wallet)),
       walletAddresses,
       walletAddress: walletAddresses[0] ?? null,
       walletLabel: walletAddresses.length > 1 ? `${walletAddresses.length} wallets` : null,
-    };
-    const candidates = buildAxiomExecutionEpisodes(sourceContext);
+    } : resolvedContext;
+    const candidates = buildProviderExecutionEpisodes(sourceContext);
     if (!candidates.length) {
-      setError("No trades found across the detected Axiom wallet(s) on this token.");
+      setError("No replayable trade episode could be constructed from these executions.");
       return;
     }
     setContext(sourceContext);
@@ -796,13 +798,13 @@ export function StudioApp(): JSX.Element {
       {stage === "connect" && (
         <main className="onboarding-page">
           <section className="hero-copy">
-            <div className="eyebrow">AXIOM → WICKLAPSE</div>
+            <div className="eyebrow">AXIOM + FOMO → WICKLAPSE</div>
             <h1>Turn the selected trade into motion.</h1>
-            <p>Open Wicklapse from Axiom’s Share dialog. Wicklapse detects your public Axiom trading wallets and combines their executions automatically.</p>
+            <p>Open Wicklapse on an Axiom coin or a specific Fomo trade. The active provider is detected automatically and its executions stay local.</p>
             <div className="capture-summary">
               <span className={context ? "ready-dot" : "idle-dot"} />
               <div>
-                <strong>{context ? `$${context.symbol} share captured` : "No Axiom share captured yet"}</strong>
+                <strong>{context ? `$${context.symbol} ${context.provider === "fomo" ? "Fomo trade" : "Axiom share"} captured` : "No supported trade captured yet"}</strong>
                 <small>{context ? `${context.tokenMint ? shortAddress(context.tokenMint) : "Mint needs confirmation"} · captured ${new Date(context.capturedAt).toLocaleTimeString()}` : "You can still open the demo studio below."}</small>
               </div>
             </div>
@@ -810,19 +812,19 @@ export function StudioApp(): JSX.Element {
 
           <section className="connect-card">
             <div className="card-head">
-              <div><span>Automatic Axiom lookup</span><h2>Generate replay</h2></div>
+              <div><span>Automatic {context?.provider === "fomo" ? "Fomo" : "Axiom"} lookup</span><h2>Generate replay</h2></div>
               <span className="private-badge">Stored locally</span>
             </div>
-            <label>
+            {context?.provider !== "fomo" && <label>
               Fallback public wallets <span className="optional-label">Optional</span>
               <input value={walletInput} onChange={(event) => setWalletInput(event.target.value)} placeholder="Normally detected from Axiom" />
               <small>{context?.walletAddresses?.length
                 ? `${context.walletAddresses.length} Axiom wallet${context.walletAddresses.length === 1 ? "" : "s"} detected. Add addresses here only if Axiom detection fails.`
                 : "Wicklapse will detect Axiom wallets when you generate. Comma-separate addresses only as a fallback."}</small>
-            </label>
+            </label>}
             <label>
               Token mint
-              <input value={mint} onChange={(event) => setMint(event.target.value.trim())} placeholder="Captured from Axiom Share" />
+              <input value={mint} onChange={(event) => setMint(event.target.value.trim())} placeholder="Captured from the active provider" />
             </label>
             <button className="primary-button" type="button" disabled={busy} onClick={() => void findTrade()}>
               Generate Replay
@@ -924,7 +926,7 @@ export function StudioApp(): JSX.Element {
           </section>
 
           <aside className="advanced-inspector">
-            <div className="inspector-heading"><div><span>MASTER CONFIG</span><h2>Composition & Export</h2></div><span className={spec.verified ? "verified" : "estimated"}>{spec.verified ? "Verified Data" : spec.tradeDataSource === "axiom" ? "Axiom Capture" : "Estimated"}</span></div>
+            <div className="inspector-heading"><div><span>MASTER CONFIG</span><h2>Composition & Export</h2></div><span className={spec.verified ? "verified" : "estimated"}>{spec.verified ? "Verified Data" : spec.tradeDataSource === "fomo" ? "Fomo Capture" : spec.tradeDataSource === "axiom" ? "Axiom Capture" : "Estimated"}</span></div>
 
             <section className="inspector-card" id="advanced-composition">
               <h3>▱ Composition setup</h3>

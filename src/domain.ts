@@ -3,6 +3,9 @@ import { z } from "zod";
 export const CurrencySchema = z.enum(["SOL", "USD"]);
 export type Currency = z.infer<typeof CurrencySchema>;
 
+export const TradeProviderSchema = z.enum(["axiom", "fomo", "rpc"]);
+export type TradeProvider = z.infer<typeof TradeProviderSchema>;
+
 export const SolanaAddressSchema = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 const DecimalStringSchema = z.string().regex(/^\d+(?:\.\d+)?$/);
 
@@ -16,10 +19,15 @@ export const TradeExecutionSchema = z.object({
   priceUsd: DecimalStringSchema,
   totalSol: DecimalStringSchema,
   totalUsd: DecimalStringSchema,
-  wallet: SolanaAddressSchema,
-  signature: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{64,96}$/),
-  pairAddress: SolanaAddressSchema,
-  source: z.literal("axiom"),
+  wallet: z.string().min(1).max(160),
+  signature: z.string().min(1).max(160),
+  pairAddress: z.string().min(1).max(160),
+  source: z.enum(["axiom", "fomo"]),
+  chainId: z.string().min(1).max(80).optional(),
+  providerTradeId: z.string().min(1).max(160).optional(),
+  tokenDecimals: z.number().int().min(0).max(30).optional(),
+  quoteCurrency: CurrencySchema.optional(),
+  quoteScale: DecimalStringSchema.optional(),
 });
 
 export type TradeExecution = z.infer<typeof TradeExecutionSchema>;
@@ -48,6 +56,17 @@ export const AxiomPairContextSchema = z.object({
 
 export type AxiomPairContext = z.infer<typeof AxiomPairContextSchema>;
 
+export const ReplayCandleSchema = z.object({
+  timestamp: z.number().positive(),
+  openSol: DecimalStringSchema,
+  highSol: DecimalStringSchema,
+  lowSol: DecimalStringSchema,
+  closeSol: DecimalStringSchema,
+  volume: DecimalStringSchema,
+});
+
+export type ReplayCandle = z.infer<typeof ReplayCandleSchema>;
+
 export const ShareContextSchema = z.object({
   id: z.string(),
   capturedAt: z.number().int().positive(),
@@ -73,6 +92,11 @@ export const ShareContextSchema = z.object({
   roiPercent: z.string().nullable(),
   positionStatus: z.enum(["open", "closed", "unknown"]),
   sourceText: z.string().max(20_000),
+  provider: z.enum(["axiom", "fomo"]).optional(),
+  chainId: z.string().max(80).nullable().optional(),
+  providerTradeId: z.string().max(160).nullable().optional(),
+  profileHandle: z.string().max(120).nullable().optional(),
+  capturedCandles: z.array(ReplayCandleSchema).max(10_000).optional(),
 });
 
 export type ShareContext = z.infer<typeof ShareContextSchema>;
@@ -119,7 +143,12 @@ export interface TradeFill {
   totalUsd?: string;
   wallet?: string;
   pairAddress?: string;
-  source?: "rpc" | "axiom";
+  source?: TradeProvider;
+  chainId?: string;
+  providerTradeId?: string;
+  quoteCurrency?: Currency;
+  /** Atomic units per displayed quote unit. SOL uses 1e9; captured USD uses 1e6. */
+  quoteScale?: string;
 }
 
 export interface TradeEpisode {
@@ -135,23 +164,16 @@ export interface TradeEpisode {
   remainingTokenRaw: string;
   tokenDecimals: number;
   approximatePnlLamports: string;
+  quoteCurrency?: Currency;
+  quoteScale?: string;
   matchScore: number;
-  matchLabel: "Exact match" | "Likely match" | "Possible match" | "Axiom capture";
+  matchLabel: "Exact match" | "Likely match" | "Possible match" | "Axiom capture" | "Fomo capture";
 }
 
 export interface ReplayPoint {
   timestamp: number;
   priceSol: string;
   pnlSol: string;
-}
-
-export interface ReplayCandle {
-  timestamp: number;
-  openSol: string;
-  highSol: string;
-  lowSol: string;
-  closeSol: string;
-  volume: string;
 }
 
 export interface ReplaySpec {
@@ -170,12 +192,14 @@ export interface ReplaySpec {
   currency: Currency;
   usdPerSol: string | null;
   verified: boolean;
-  marketDataSource?: "axiom" | "gecko" | "fills" | "ohlcv";
+  marketDataSource?: "axiom" | "fomo" | "gecko" | "fills" | "ohlcv";
   candleIntervalSeconds?: number;
   /** Explicit market-time range used to place entry/exit at requested video times. */
   chartStartTimestamp?: number;
   chartEndTimestamp?: number;
-  tradeDataSource?: "rpc" | "axiom";
+  tradeDataSource?: TradeProvider;
+  accountingCurrency?: Currency;
+  provider?: "axiom" | "fomo";
 }
 
 export interface StudioProject {

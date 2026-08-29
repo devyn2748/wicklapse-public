@@ -1,7 +1,7 @@
 import { browser } from "wxt/browser";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { fetchAxiomExecutions, pairAddressFromAxiomUrl } from "../../src/axiom-api";
+import { fetchAxiomExecutions, normalizeWalletAddresses, pairAddressFromAxiomUrl } from "../../src/axiom-api";
 import { parseAxiomAthMarketCap } from "../../src/axiom-capture";
 import { extractAxiomPairContext } from "../../src/axiom-candles";
 import { fetchAxiomWalletAddresses } from "../../src/axiom-wallets";
@@ -64,6 +64,21 @@ function base58From(value: string): string | null {
 
 function findPairAddress(): string | null {
   return pairAddressFromAxiomUrl(location.href);
+}
+
+function findPageWalletAddresses(excludedAddresses: Array<string | null>): string[] {
+  const excluded = new Set(excludedAddresses.filter((value): value is string => Boolean(value)));
+  const values = Array.from(document.querySelectorAll<HTMLElement>(
+    '[data-wallet-address], [data-wallet], [aria-label*="wallet" i], [title*="wallet" i]',
+  )).flatMap((element) => [
+    element.dataset.walletAddress,
+    element.dataset.wallet,
+    element.getAttribute("aria-label"),
+    element.getAttribute("title"),
+    element.textContent,
+  ]).filter((value): value is string => typeof value === "string");
+  return normalizeWalletAddresses(values.flatMap((value) => value.match(BASE58_PATTERN) ?? []))
+    .filter((address) => !excluded.has(address));
 }
 
 let activePairAddress = findPairAddress();
@@ -209,22 +224,26 @@ function buildShareContext(): ShareContext {
   const summaryUsesSol = Boolean(summary?.querySelector('img[alt="SOL" i]'));
   const holding = numberAfterLabel(summaryText, ["Holding", "Position"]);
   const sold = numberAfterLabel(summaryText, ["Sold"]);
+  const pairAddress = findPairAddress();
+  const tokenMint = findMint();
+  const pageWallets = findPageWalletAddresses([pairAddress, tokenMint]);
 
   const pairContext = findAxiomPairContext();
   return ShareContextSchema.parse({
     id: crypto.randomUUID(),
     capturedAt: Date.now(),
     pageUrl: location.href,
-    tokenMint: findMint(),
-    pairAddress: findPairAddress(),
+    tokenMint,
+    pairAddress,
     symbol: findSymbol(),
     tokenName: null,
     tokenImageUrl: findTokenImage(),
     athMarketCapUsd: findAthMarketCapUsd(),
     axiomChartUrl: pairContext?.chartBaseUrl ?? null,
     axiomPairContext: pairContext,
-    walletAddress: null,
-    walletLabel: null,
+    walletAddresses: pageWallets.length ? pageWallets : undefined,
+    walletAddress: pageWallets[0] ?? null,
+    walletLabel: pageWallets.length > 1 ? `${pageWallets.length} wallets` : null,
     boughtSol: summaryUsesSol ? numberAfterLabel(summaryText, ["Bought", "Invested"]) : null,
     soldSol: summaryUsesSol ? sold : null,
     holdingSol: summaryUsesSol ? holding : null,
@@ -235,22 +254,22 @@ function buildShareContext(): ShareContext {
   });
 }
 
-async function retrieveCurrentTradeContext(): Promise<ShareContext> {
+async function retrieveCurrentTradeContext(signal?: AbortSignal, manualWallets: string[] = []): Promise<ShareContext> {
   const context = buildShareContext();
   if (!context.pairAddress) throw new Error("The current Axiom URL does not contain a pair address.");
   const savedWallets = await loadTradingWalletAddresses();
   let detectedWallets: string[] = [];
   try {
-    detectedWallets = await fetchAxiomWalletAddresses();
+    detectedWallets = await fetchAxiomWalletAddresses({ signal });
   } catch (error) {
     if (!savedWallets.length) throw error;
   }
-  const walletAddresses = [...new Set([...detectedWallets, ...savedWallets])];
+  const walletAddresses = [...new Set([...detectedWallets, ...(context.walletAddresses ?? []), ...savedWallets, ...manualWallets])];
   if (!walletAddresses.length) {
     throw new Error("Axiom did not expose any Solana trading wallets. Confirm a public trading wallet is active in Axiom, then try again.");
   }
   if (detectedWallets.length) await saveTradingWalletAddresses(walletAddresses);
-  const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses });
+  const tradeExecutions = await fetchAxiomExecutions({ pairAddress: context.pairAddress, walletAddresses }, { signal });
   const enrichedContext = ShareContextSchema.parse({
     ...context,
     tradeExecutions,
@@ -349,6 +368,7 @@ export default defineContentScript({
       }
       overlayRoot?.render(React.createElement(InstantOverlay, {
         context,
+        resolveContext: retrieveCurrentTradeContext,
         onClose: closeOverlay,
       }));
     };

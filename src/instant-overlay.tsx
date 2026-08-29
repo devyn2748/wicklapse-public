@@ -1,20 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
-import { fetchAxiomExecutions, normalizeWalletAddresses } from "./axiom-api";
-import { fetchAxiomWalletAddresses } from "./axiom-wallets";
-import { buildAxiomExecutionEpisodes } from "./axiom-capture";
+import { normalizeWalletAddresses } from "./axiom-api";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
+import { buildProviderExecutionEpisodes } from "./provider-capture";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
 import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName } from "./renderer";
 import {
   loadStudioSettings,
-  loadTradingWalletAddresses,
   saveProject,
   saveShareContext,
   saveStudioSettings,
-  saveTradingWalletAddresses,
 } from "./storage";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "./studio-settings";
 
@@ -23,6 +20,7 @@ const logoUrl = browser.runtime.getURL("/icon.png");
 
 interface InstantOverlayProps {
   context: ShareContext;
+  resolveContext?: (signal?: AbortSignal, manualWallets?: string[]) => Promise<ShareContext>;
   onClose: () => void;
 }
 
@@ -167,7 +165,7 @@ function Segmented<T extends string | number>({
   ))}</div>;
 }
 
-export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.Element {
+export function InstantOverlay({ context, resolveContext, onClose }: InstantOverlayProps): JSX.Element {
   const [view, setView] = useState<View>("booting");
   const [spec, setSpec] = useState<ReplaySpec | null>(null);
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
@@ -192,45 +190,24 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
     setReplayContext(null);
     setExportProgress(null);
     try {
-      if (!context.pairAddress) throw new Error("Open Wicklapse from an Axiom /meme/{pairAddress} coin page.");
-      const savedWallets = await loadTradingWalletAddresses();
-      let detectedWallets: string[] = [];
-      try {
-        detectedWallets = await fetchAxiomWalletAddresses({ signal: request.signal });
-      } catch (caught) {
-        if (!savedWallets.length && !manualWallets.length) throw caught;
-      }
-      const walletAddresses = [...new Set([...detectedWallets, ...savedWallets, ...manualWallets])];
-      if (!walletAddresses.length) {
-        throw new Error("Axiom did not expose any Solana trading wallets. Confirm a public trading wallet is active in Axiom, then try again.");
-      }
-      if (detectedWallets.length || manualWallets.length) await saveTradingWalletAddresses(walletAddresses);
-      setStatus(`Retrieving executions across ${walletAddresses.length} Axiom wallet${walletAddresses.length === 1 ? "" : "s"}…`);
-      const tradeExecutions = await fetchAxiomExecutions(
-        { pairAddress: context.pairAddress, walletAddresses },
-        { signal: request.signal },
-      );
-      if (!tradeExecutions.length) {
-        throw new Error("No trades found across the detected Axiom wallet(s) for this token.");
-      }
-      const enrichedContext: ShareContext = {
-        ...context,
-        tradeExecutions,
-        walletAddresses,
-        walletAddress: walletAddresses[0] ?? null,
-        walletLabel: walletAddresses.length > 1 ? `${walletAddresses.length} wallets` : null,
-      };
+      const providerName = context.provider === "fomo" ? "Fomo" : "Axiom";
+      setStatus(`Retrieving the latest ${providerName} executions…`);
+      const enrichedContext = resolveContext
+        ? await resolveContext(request.signal, manualWallets)
+        : context;
+      if (!enrichedContext.tradeExecutions?.length) throw new Error(`No replayable ${providerName} executions were returned for this trade.`);
       await saveShareContext(enrichedContext);
       setReplayContext(enrichedContext);
-      const episodes = buildAxiomExecutionEpisodes(enrichedContext);
+      const episodes = buildProviderExecutionEpisodes(enrichedContext);
       const episode = selectCurrentTradeEpisode(episodes);
       if (!episode) {
-        throw new Error("No replayable buys or sells were found across the detected Axiom wallet(s).");
+        throw new Error(`No replayable buys or sells were found in this ${providerName} trade.`);
       }
-      setStatus(`Building from ${episode.fills.length} Axiom execution${episode.fills.length === 1 ? "" : "s"}…`);
+      setStatus(`Building from ${episode.fills.length} ${providerName} execution${episode.fills.length === 1 ? "" : "s"}…`);
       const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal, timelineOptions);
-      if (!replayRequestRef.current.isLatest(request.id) || context.pairAddress !== enrichedContext.pairAddress) return;
+      if (!replayRequestRef.current.isLatest(request.id) || context.provider !== enrichedContext.provider) return;
       setSpec(nextSpec);
+      if (nextSpec.accountingCurrency === "USD") setSettings((current) => ({ ...current, currency: "USD" }));
       await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
       setView("instant");
     } catch (caught) {
@@ -238,7 +215,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
       setError(caught instanceof Error ? caught.message : "The trade could not be resolved.");
       setView("error");
     }
-  }, [context]);
+  }, [context, resolveContext]);
 
   useEffect(() => {
     let active = true;
@@ -400,7 +377,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
           <section className="wick-side-section"><div className="wick-section-title"><h3>Horizontal levels</h3><span>Optional</span></div><div className="wick-check-list">
             <label className="wick-check"><input type="checkbox" checked={settings.showAverageBuyLine} onChange={(event) => patch("showAverageBuyLine", event.target.checked)} /><span><b>Average Buy</b><small>Running token-volume-weighted buy price</small></span></label>
             <label className="wick-check"><input type="checkbox" checked={settings.showAverageSellLine} onChange={(event) => patch("showAverageSellLine", event.target.checked)} /><span><b>Average Sell</b><small>Updates after every partial or full sell</small></span></label>
-            <label className="wick-check"><input type="checkbox" checked={settings.showAthLine} disabled={!spec.athMarketCapUsd} onChange={(event) => patch("showAthLine", event.target.checked)} /><span><b>Coin ATH</b><small>{spec.athMarketCapUsd ? "Line when reached in-clip; otherwise top badge" : "True ATH unavailable from Axiom"}</small></span></label>
+            <label className="wick-check"><input type="checkbox" checked={settings.showAthLine} disabled={!spec.athMarketCapUsd} onChange={(event) => patch("showAthLine", event.target.checked)} /><span><b>Coin ATH</b><small>{spec.athMarketCapUsd ? "Line when reached in-clip; otherwise top badge" : "True ATH unavailable from this provider"}</small></span></label>
           </div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Affiliate / X Handle</h3><span>Optional</span></div><label>Link or @handle<input type="text" value={settings.affiliateLink} onChange={(event) => patch("affiliateLink", event.target.value)} placeholder="e.g. @username or t.me/link" maxLength={40} /></label></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Custom clip length</h3><span>1–60 seconds</span></div><label>Video duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label></section>
@@ -417,9 +394,9 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
           </div>
         </header>
 
-        {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>Axiom trade capture and rendering remain on this device.</p></main>}
+        {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>{context.provider === "fomo" ? "Fomo" : "Axiom"} trade capture and rendering remain on this device.</p></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p><label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label><div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button><button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button></div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button>}</div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
@@ -465,7 +442,7 @@ export function InstantOverlay({ context, onClose }: InstantOverlayProps): JSX.E
             </div>
           </section>
         </main>}
-        <footer className="wick-footer"><span>♢ {spec?.verified ? "On-chain verified" : spec ? "Captured from Axiom · local-first" : "Local-first · private by default"}</span><b>v{WICKLAPSE_VERSION} · Rendered client-side</b></footer>
+        <footer className="wick-footer"><span>♢ {spec?.verified ? "On-chain verified" : spec ? `Captured from ${spec.provider === "fomo" ? "Fomo" : "Axiom"} · local-first` : "Local-first · private by default"}</span><b>v{WICKLAPSE_VERSION} · Rendered client-side</b></footer>
       </section>
       </div>
     </div>

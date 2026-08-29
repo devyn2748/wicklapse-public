@@ -30,7 +30,7 @@ interface MarketHistory {
   candles: ReplayCandle[];
   points: ReplayPoint[];
   interval: number;
-  source: "axiom" | "gecko";
+  source: "axiom" | "fomo" | "gecko";
 }
 
 export interface ReplayTimelineOptions {
@@ -110,7 +110,7 @@ export class LatestReplayRequest {
 }
 
 async function getMarketCapMultiplier(context: ShareContext, signal?: AbortSignal): Promise<string | null> {
-  if (!context.pairAddress) return null;
+  if (!context.pairAddress || context.provider === "fomo") return null;
   try {
     const response = await fetchPublicMarketJson(
       `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(context.pairAddress)}`,
@@ -150,7 +150,8 @@ export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCa
   for (const item of timeline) {
     while (fillIndex < fills.length && fills[fillIndex]!.timestamp <= item.timestamp) {
       const fill = fills[fillIndex]!;
-      const quote = new Decimal(fill.quoteLamports).div(LAMPORTS);
+      const quoteScale = new Decimal(fill.quoteScale ?? LAMPORTS);
+      const quote = new Decimal(fill.quoteLamports).div(quoteScale);
       const amount = new Decimal(fill.tokenAmountRaw).div(new Decimal(10).pow(fill.tokenDecimals));
       if (fill.side === "buy") {
         cashFlow = cashFlow.minus(quote);
@@ -159,7 +160,7 @@ export function buildMarkToMarketPoints(episode: TradeEpisode, candles: ReplayCa
         cashFlow = cashFlow.plus(quote);
         holdings = Decimal.max(0, holdings.minus(amount));
       }
-      fees = fees.plus(new Decimal(fill.networkFeeLamports).div(LAMPORTS));
+      fees = fees.plus(new Decimal(fill.networkFeeLamports).div(quoteScale));
       fillIndex += 1;
     }
     const price = new Decimal(item.priceSol || 0);
@@ -191,6 +192,26 @@ function aggregateCandles(candles: ReplayCandle[], interval: number): ReplayCand
   }));
 }
 
+/** Selects only candles adjacent to the replay, never Fomo's complete UI chart range. */
+export function selectFocusedFomoCandles(candles: ReplayCandle[], windowStart: number, windowEnd: number): ReplayCandle[] {
+  const sorted = [...candles]
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .filter((candle, index, source) => index === 0 || candle.timestamp !== source[index - 1]!.timestamp);
+  const inside = sorted.filter((candle) => candle.timestamp >= windowStart && candle.timestamp <= windowEnd);
+  if (inside.length >= 2) return inside;
+  return sorted
+    .map((candle) => ({
+      candle,
+      distance: candle.timestamp < windowStart
+        ? windowStart - candle.timestamp
+        : candle.timestamp > windowEnd ? candle.timestamp - windowEnd : 0,
+    }))
+    .sort((left, right) => left.distance - right.distance || left.candle.timestamp - right.candle.timestamp)
+    .slice(0, Math.min(4, sorted.length))
+    .map(({ candle }) => candle)
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
 async function getUsdPerSol(signal?: AbortSignal): Promise<string | null> {
   try {
     const response = await fetchPublicMarketJson("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal });
@@ -211,9 +232,20 @@ async function getMarketHistory(
   timeWindow?: CandleTimeWindow,
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
-  const windowStart = timeWindow?.fromSeconds ?? episode.startTimestamp;
-  const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp;
+  const tradeSpan = Math.max(1, episode.endTimestamp - episode.startTimestamp);
+  const fomoPadding = context.provider === "fomo" && !timeWindow ? Math.max(30, tradeSpan * 0.15) : 0;
+  const windowStart = timeWindow?.fromSeconds ?? Math.max(0, episode.startTimestamp - fomoPadding);
+  const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp + fomoPadding;
   const spanSeconds = Math.max(1, windowEnd - windowStart);
+  if (context.provider === "fomo" && context.capturedCandles && context.capturedCandles.length >= 2) {
+    const source = selectFocusedFomoCandles(context.capturedCandles, windowStart, windowEnd);
+    const request = selectCandleRequest(spanSeconds, candleInterval);
+    const sourceInterval = Math.max(1, Math.min(...source.slice(1).map((candle, index) => candle.timestamp - source[index]!.timestamp).filter((value) => value > 0)));
+    const candles = request.interval > sourceInterval ? aggregateCandles(source, request.interval) : source;
+    if (candles.length >= 2) {
+      return { candles, points: buildMarkToMarketPoints(episode, candles), interval: Math.max(sourceInterval, request.interval), source: "fomo" };
+    }
+  }
   if (episode.fills.some((fill) => fill.source === "axiom")) {
     try {
       const axiom = await fetchAxiomCandles(context, episode, candleInterval, { signal }, timeWindow);
@@ -304,7 +336,9 @@ export async function createReplaySpec(
 ): Promise<ReplaySpec> {
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
   const fillPoints = buildReplayPoints(episode);
-  const tradeDataSource = episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
+  const tradeDataSource = episode.fills.some((fill) => fill.source === "fomo")
+    ? "fomo"
+    : episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
   const timeWindow = calculateReplayTimeWindow(episode, timelineOptions);
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(signal),
@@ -324,7 +358,7 @@ export async function createReplaySpec(
     candles: marketHistory?.candles,
     marketCapMultiplier,
     athMarketCapUsd: context.athMarketCapUsd ?? null,
-    currency: "SOL",
+    currency: episode.quoteCurrency ?? "SOL",
     usdPerSol,
     verified: tradeDataSource === "rpc" && episode.matchScore >= 90,
     marketDataSource: marketHistory?.source ?? "fills",
@@ -332,5 +366,7 @@ export async function createReplaySpec(
     chartStartTimestamp: timeWindow?.fromSeconds,
     chartEndTimestamp: timeWindow?.toSeconds,
     tradeDataSource,
+    accountingCurrency: episode.quoteCurrency ?? "SOL",
+    provider: context.provider ?? "axiom",
   };
 }

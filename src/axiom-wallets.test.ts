@@ -7,7 +7,7 @@ const archivedWallet = "8".repeat(44);
 const evmWallet = `0x${"a".repeat(40)}`;
 
 describe("Axiom wallet discovery", () => {
-  it("keeps every non-archived Solana wallet, orders the primary first, and ignores unrelated response secrets", () => {
+  it("keeps every Solana wallet for historical lookup, orders the primary first, and ignores unrelated response secrets", () => {
     const parsed = parseAxiomPublicWallets({
       bundleKey: "must-never-leave-the-parser",
       wallets: [
@@ -22,6 +22,7 @@ describe("Axiom wallet discovery", () => {
     expect(parsed).toEqual([
       { address: primaryWallet, isPrimary: true, name: "Axiom Main" },
       { address: secondWallet, isPrimary: false, name: "Trading 2" },
+      { address: archivedWallet, isPrimary: false, name: "Old" },
     ]);
     expect(JSON.stringify(parsed)).not.toContain("bundleKey");
   });
@@ -38,9 +39,16 @@ describe("Axiom wallet discovery", () => {
     });
     expect(parsed).toEqual([
       { address: primaryWallet, isPrimary: true, name: "Axiom Main" },
+      { address: archivedWallet, isPrimary: false, name: "Archived" },
       { address: secondWallet, isPrimary: false, name: "Wallet" },
     ]);
     expect(JSON.stringify(parsed)).not.toContain("must-never-leave-the-parser");
+  });
+
+  it("accepts alternate object keys used for linked Solana wallets", () => {
+    expect(parseAxiomPublicWallets({
+      wallets: [{ chain: "solana", address: secondWallet, isDefault: true, name: "Linked" }],
+    })).toEqual([{ address: secondWallet, isPrimary: true, name: "Linked" }]);
   });
 
   it("requests the signed-in Axiom wallet list without manually supplying credentials", async () => {

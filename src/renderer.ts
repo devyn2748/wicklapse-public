@@ -203,9 +203,11 @@ function formatPrice(value: number): string {
   return value.toPrecision(4);
 }
 
-function currencyValue(sol: Decimal, spec: ReplaySpec, currency: Currency): Decimal {
-  if (currency === "SOL") return sol;
-  return spec.usdPerSol ? sol.mul(spec.usdPerSol) : new Decimal(0);
+function currencyValue(value: Decimal, spec: ReplaySpec, currency: Currency): Decimal {
+  const accountingCurrency = spec.accountingCurrency ?? "SOL";
+  if (currency === accountingCurrency) return value;
+  if (!spec.usdPerSol) return new Decimal(0);
+  return accountingCurrency === "USD" ? value.div(spec.usdPerSol) : value.mul(spec.usdPerSol);
 }
 
 function walletDisclosure(spec: ReplaySpec, visibility: WalletVisibility): string {
@@ -624,6 +626,7 @@ function drawLandscapeReplayFrame(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)!.timestamp,
   );
+  const replayCandles = candles.filter((candle) => candle.timestamp >= chartStart - interval && candle.timestamp <= chartEnd);
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = 1; // Removed fade-in so video doesn't start blank
   const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
@@ -635,7 +638,8 @@ function drawLandscapeReplayFrame(
   }
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
-  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
+  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(spec.episode.quoteScale ?? 1_000_000_000);
+  const boughtDisplay = currencyValue(boughtSol, spec, config.currency);
   const activeValue = currencyValue(active.pnl, spec, config.currency);
   const roi = boughtSol.isZero() ? new Decimal(0) : active.pnl.div(boughtSol).mul(100);
   const isLoss = activeValue.isNegative();
@@ -711,7 +715,7 @@ function drawLandscapeReplayFrame(
   
   context.fillStyle = theme.text;
   context.font = `bold ${40 * unit}px sans-serif`;
-  context.fillText(compactNumber(boughtSol.toNumber()), alignCol3, metricsY + lineSpacing);
+  context.fillText(compactNumber(boughtDisplay.toNumber()), alignCol3, metricsY + lineSpacing);
 
   context.fillStyle = theme.muted;
   context.font = `500 ${40 * unit}px sans-serif`;
@@ -723,13 +727,14 @@ function drawLandscapeReplayFrame(
 
   const pnlSol = active.pnl;
   const positionSol = boughtSol.plus(pnlSol);
+  const positionDisplay = currencyValue(positionSol, spec, config.currency);
   context.fillStyle = theme.text;
   context.font = `bold ${40 * unit}px sans-serif`;
-  context.fillText(compactNumber(positionSol.toNumber()), alignCol3, metricsY + lineSpacing * 2);
+  context.fillText(compactNumber(positionDisplay.toNumber()), alignCol3, metricsY + lineSpacing * 2);
 
   context.globalAlpha = 1;
 
-  const animatedCandles = candles.flatMap((candle) => {
+  const animatedCandles = replayCandles.flatMap((candle) => {
     if (candle.timestamp > activeTimestamp) return [];
     const local = clamp((activeTimestamp - candle.timestamp) / interval);
     const open = Number(candle.openSol);
@@ -748,7 +753,7 @@ function drawLandscapeReplayFrame(
     if (![open, high, low, close].every(Number.isFinite)) return [];
     return [{ ...candle, open, high, low, close, local }];
   });
-  const visiblePoints = points.filter((point) => point.timestamp <= activeTimestamp);
+  const visiblePoints = points.filter((point) => point.timestamp >= chartStart - interval && point.timestamp <= activeTimestamp);
   const rawPriceValues = animatedCandles.length
     ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
     : visiblePoints.map((point) => Number(point.priceSol));
@@ -922,7 +927,7 @@ function drawLandscapeReplayFrame(
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
   for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
-    const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
+    const quote = new Decimal(fill.quoteLamports).div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
     const price = new Decimal(fill.estimatedPriceSol || 0);
     const previous = markers.at(-1);
     if (previous && previous.side === fill.side && fill.timestamp - previous.timestamp <= markerWindow) {
@@ -961,7 +966,7 @@ function drawLandscapeReplayFrame(
     const x = xForTime(marker.timestamp);
     const y = yForPrice(marker.weightedPrice.toNumber());
     const color = marker.side === "buy" ? theme.positive : theme.negative;
-    const label = `${marker.side.toUpperCase()} ${marker.quote.toDecimalPlaces(3).toString()} SOL`;
+    const label = `${marker.side.toUpperCase()} ${formatMoney(marker.quote, spec.accountingCurrency ?? "SOL", true).replace(/^\+/, "")}`;
     context.font = `bold ${25 * unit}px ui-monospace, SFMono-Regular, monospace`;
     const labelWidth = context.measureText(label).width + 40 * unit;
     const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);
@@ -1044,6 +1049,7 @@ function drawPortraitReplayFrame(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)!.timestamp,
   );
+  const replayCandles = candles.filter((candle) => candle.timestamp >= chartStart - interval && candle.timestamp <= chartEnd);
   const chartSpan = Math.max(1, chartEnd - chartStart);
   const intro = 1; // Removed fade-in
   const explicitTiming = config.chartLeadSeconds != null || config.chartTrailSeconds != null;
@@ -1055,7 +1061,8 @@ function drawPortraitReplayFrame(
   }
   const activeTimestamp = chartStart + chartSpan * chartReveal;
   const active = interpolateReplayAtTimestamp(points, activeTimestamp);
-  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(1_000_000_000);
+  const boughtSol = new Decimal(spec.episode.totalBoughtLamports).div(spec.episode.quoteScale ?? 1_000_000_000);
+  const boughtDisplay = currencyValue(boughtSol, spec, config.currency);
   const activeValue = currencyValue(active.pnl, spec, config.currency);
   const roi = boughtSol.isZero() ? new Decimal(0) : active.pnl.div(boughtSol).mul(100);
   const isLoss = activeValue.isNegative();
@@ -1130,11 +1137,12 @@ function drawPortraitReplayFrame(
 
   const roiText = `${roi.isPositive() ? "+" : ""}${roi.toFixed(config.exactValues ? 2 : 0)}%`;
   drawMetricRow("PNL", roiText, metricsY + lineSpacing, outcomeColor);
-  drawMetricRow("Invested", compactNumber(boughtSol.toNumber()), metricsY + lineSpacing * 2, "#ffffff", true);
+  drawMetricRow("Invested", compactNumber(boughtDisplay.toNumber()), metricsY + lineSpacing * 2, "#ffffff", true);
   
   const pnlSol = active.pnl;
   const positionSol = boughtSol.plus(pnlSol);
-  drawMetricRow("Position", compactNumber(positionSol.toNumber()), metricsY + lineSpacing * 3, "#ffffff", true);
+  const positionDisplay = currencyValue(positionSol, spec, config.currency);
+  drawMetricRow("Position", compactNumber(positionDisplay.toNumber()), metricsY + lineSpacing * 3, "#ffffff", true);
 
   context.globalAlpha = 1;
 
@@ -1143,7 +1151,7 @@ function drawPortraitReplayFrame(
   const chartWidth = width - margin * 2;
   const chartHeight = metricsY - 80 * unit - chartY;
 
-  const animatedCandles = candles.flatMap((candle) => {
+  const animatedCandles = replayCandles.flatMap((candle) => {
     if (candle.timestamp > activeTimestamp) return [];
     const local = clamp((activeTimestamp - candle.timestamp) / interval);
     const open = Number(candle.openSol);
@@ -1162,7 +1170,7 @@ function drawPortraitReplayFrame(
     if (![open, high, low, close].every(Number.isFinite)) return [];
     return [{ ...candle, open, high, low, close, local }];
   });
-  const visiblePoints = points.filter((point) => point.timestamp <= activeTimestamp);
+  const visiblePoints = points.filter((point) => point.timestamp >= chartStart - interval && point.timestamp <= activeTimestamp);
   const rawPriceValues = animatedCandles.length
     ? animatedCandles.flatMap((candle) => [candle.low, candle.high])
     : visiblePoints.map((point) => Number(point.priceSol));
@@ -1336,7 +1344,7 @@ function drawPortraitReplayFrame(
   const markerWindow = Math.max(2, interval);
   const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
   for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
-    const quote = new Decimal(fill.quoteLamports).div(1_000_000_000);
+    const quote = new Decimal(fill.quoteLamports).div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
     const price = new Decimal(fill.estimatedPriceSol || 0);
     const previous = markers.at(-1);
     if (previous && previous.side === fill.side && fill.timestamp - previous.timestamp <= markerWindow) {
@@ -1375,7 +1383,7 @@ function drawPortraitReplayFrame(
     const x = xForTime(marker.timestamp);
     const y = yForPrice(marker.weightedPrice.toNumber());
     const color = marker.side === "buy" ? theme.positive : theme.negative;
-    const label = `${marker.side.toUpperCase()} ${marker.quote.toDecimalPlaces(3).toString()} SOL`;
+    const label = `${marker.side.toUpperCase()} ${formatMoney(marker.quote, spec.accountingCurrency ?? "SOL", true).replace(/^\+/, "")}`;
     context.font = `bold ${25 * unit}px ui-monospace, SFMono-Regular, monospace`;
     const labelWidth = context.measureText(label).width + 40 * unit;
     const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);

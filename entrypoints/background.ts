@@ -2,6 +2,13 @@ import { browser } from "wxt/browser";
 
 const marketRequests = new Map<string, AbortController>();
 const PUBLIC_MARKET_HOSTS = new Set(["api.geckoterminal.com", "api.coingecko.com"]);
+const CONTENT_SCRIPTS = {
+  axiom: "/content-scripts/axiom.js",
+  fomo: "/content-scripts/fomo.js",
+} as const;
+const FOMO_BRIDGE_SCRIPT = "/content-scripts/fomo-bridge.js" as const;
+
+type SupportedProvider = keyof typeof CONTENT_SCRIPTS;
 
 type AxiomJsonResult = { ok: boolean; status?: number; payload?: unknown; error?: string };
 
@@ -97,17 +104,40 @@ async function fetchPublicMarketJson(message: {
   }
 }
 
-async function openInstantOnAxiom(tab: Browser.tabs.Tab): Promise<boolean> {
+function providerForUrl(rawUrl: string | undefined): SupportedProvider | null {
+  if (!rawUrl) return null;
+  try {
+    const url = new URL(rawUrl);
+    if (url.hostname === "axiom.trade" || url.hostname.endsWith(".axiom.trade")) return "axiom";
+    if (url.hostname === "fomo.family") return "fomo";
+  } catch {
+    // Ignore malformed tab URLs.
+  }
+  return null;
+}
+
+async function sendMessageToSupportedTab(tabId: number, provider: SupportedProvider, message: Record<string, unknown>): Promise<unknown> {
+  if (provider === "fomo") {
+    await browser.scripting.executeScript({ target: { tabId }, world: "MAIN", files: [FOMO_BRIDGE_SCRIPT] }).catch(() => undefined);
+  }
+  try {
+    return await browser.tabs.sendMessage(tabId, message);
+  } catch {
+    await browser.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPTS[provider]] });
+    return browser.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function openInstantOnSupportedTab(tab: Browser.tabs.Tab): Promise<boolean> {
   if (!tab.id || !tab.url) return false;
-  const url = new URL(tab.url);
-  if (url.hostname !== "axiom.trade" && !url.hostname.endsWith(".axiom.trade")) return false;
+  const provider = providerForUrl(tab.url);
+  if (!provider) return false;
 
   try {
-    await browser.tabs.sendMessage(tab.id, { type: "OPEN_WICKLAPSE_INSTANT" });
+    await sendMessageToSupportedTab(tab.id, provider, { type: "OPEN_WICKLAPSE_INSTANT" });
     return true;
   } catch (error) {
-    // This normally means the extension was just installed and the existing Axiom tab has not been reloaded yet.
-    console.warn("Wicklapse could not capture the active Axiom tab.", error);
+    console.warn(`Wicklapse could not capture the active ${provider} tab.`, error);
     return false;
   }
 }
@@ -117,9 +147,20 @@ async function refreshAxiomTrade(pairAddress: string | null): Promise<unknown> {
   const matchingTab = tabs.find((tab) => tab.id && (!pairAddress || tab.url?.includes(`/meme/${pairAddress}`)));
   if (!matchingTab?.id) return { ok: false, error: "Keep the matching Axiom coin page open, then try Generate Replay again." };
   try {
-    return await browser.tabs.sendMessage(matchingTab.id, { type: "FETCH_AXIOM_EXECUTIONS" });
+    return await sendMessageToSupportedTab(matchingTab.id, "axiom", { type: "FETCH_AXIOM_EXECUTIONS" });
   } catch {
-    return { ok: false, error: "Reload the open Axiom coin page so Wicklapse can retrieve its trades." };
+    return { ok: false, error: "Wicklapse could not initialize on the open Axiom coin page. Reload the page and retry." };
+  }
+}
+
+async function refreshFomoTrade(tradeId: string | null): Promise<unknown> {
+  const tabs = await browser.tabs.query({ url: ["https://fomo.family/profile/*"] });
+  const matchingTab = tabs.find((tab) => tab.id && (!tradeId || tab.url?.includes(`tradeId=${encodeURIComponent(tradeId)}`)));
+  if (!matchingTab?.id) return { ok: false, error: "Keep the matching Fomo trade open, then try Generate Replay again." };
+  try {
+    return await sendMessageToSupportedTab(matchingTab.id, "fomo", { type: "FETCH_FOMO_EXECUTIONS" });
+  } catch {
+    return { ok: false, error: "Reload the open Fomo trade once so Wicklapse can observe its authenticated response." };
   }
 }
 
@@ -191,23 +232,35 @@ async function runRpcRequest(message: {
 
 export default defineBackground(() => {
   browser.action.onClicked.addListener((tab) => {
-    const url = tab.url ? new URL(tab.url) : null;
-    const isAxiom = url && (url.hostname === "axiom.trade" || url.hostname.endsWith(".axiom.trade"));
-    if (isAxiom) {
-      void openInstantOnAxiom(tab);
+    if (providerForUrl(tab.url)) {
+      void openInstantOnSupportedTab(tab);
       return;
     }
-    void browser.tabs.query({ url: ["https://axiom.trade/meme/*", "https://*.axiom.trade/meme/*"] }).then(async (tabs) => {
-      const axiomTab = tabs.find((candidate) => candidate.id && candidate.url);
-      if (!axiomTab?.id) return;
-      await browser.tabs.update(axiomTab.id, { active: true });
-      if (axiomTab.windowId) await browser.windows.update(axiomTab.windowId, { focused: true });
-      await openInstantOnAxiom(axiomTab);
+    void browser.tabs.query({ url: [
+      "https://axiom.trade/meme/*",
+      "https://*.axiom.trade/meme/*",
+      "https://fomo.family/profile/*",
+    ] }).then(async (tabs) => {
+      const supportedTab = tabs.find((candidate) => candidate.active && candidate.id && candidate.url)
+        ?? tabs.find((candidate) => candidate.id && candidate.url);
+      if (!supportedTab?.id) return;
+      await browser.tabs.update(supportedTab.id, { active: true });
+      if (supportedTab.windowId) await browser.windows.update(supportedTab.windowId, { focused: true });
+      await openInstantOnSupportedTab(supportedTab);
     }).catch(() => undefined);
   });
   browser.runtime.onMessage.addListener((message: unknown, sender) => {
     if (!message || typeof message !== "object" || !("type" in message)) return undefined;
     if (message.type === "WICKLAPSE_REFRESH_AXIOM_TRADE") {
+      const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
+      return refreshAxiomTrade(pairAddress);
+    }
+    if (message.type === "WICKLAPSE_REFRESH_TRADE") {
+      const provider = "provider" in message && message.provider === "fomo" ? "fomo" : "axiom";
+      if (provider === "fomo") {
+        const tradeId = "providerTradeId" in message && typeof message.providerTradeId === "string" ? message.providerTradeId : null;
+        return refreshFomoTrade(tradeId);
+      }
       const pairAddress = "pairAddress" in message && typeof message.pairAddress === "string" ? message.pairAddress : null;
       return refreshAxiomTrade(pairAddress);
     }
