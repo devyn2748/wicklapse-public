@@ -5,6 +5,7 @@ import { ShareContextSchema, type ShareContext } from "../../src/domain";
 import {
   fomoHandleFromUrl,
   fomoTradeIdFromUrl,
+  focusedFomoCandleUrl,
   parseFomoCandles,
   parseFomoTradeResponse,
   type FomoCapturedResponse,
@@ -15,6 +16,10 @@ import overlayStyles from "../../src/instant-overlay.css?inline";
 import { saveShareContext } from "../../src/storage";
 
 const captures: FomoCapturedResponse[] = [];
+const pendingCandleRequests = new Map<string, {
+  resolve: (capture: FomoCapturedResponse | null) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
 
 function retainCapture(capture: FomoCapturedResponse): void {
   const existing = captures.findIndex((item) => item.url === capture.url);
@@ -96,6 +101,26 @@ function capturedContext(pageUrl = location.href, explicitTradeId?: string): Sha
   return ShareContextSchema.parse({ ...baseContext, capturedCandles });
 }
 
+function requestFocusedCandles(url: string, signal?: AbortSignal): Promise<FomoCapturedResponse | null> {
+  if (signal?.aborted) return Promise.resolve(null);
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const finish = (capture: FomoCapturedResponse | null) => {
+      const pending = pendingCandleRequests.get(requestId);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      pendingCandleRequests.delete(requestId);
+      signal?.removeEventListener("abort", abort);
+      resolve(capture);
+    };
+    const abort = () => finish(null);
+    const timeout = setTimeout(() => finish(null), 8_000);
+    pendingCandleRequests.set(requestId, { resolve: finish, timeout });
+    signal?.addEventListener("abort", abort, { once: true });
+    window.postMessage({ source: FOMO_BRIDGE_MESSAGE_SOURCE, type: "focused-candle-request", requestId, url }, location.origin);
+  });
+}
+
 async function retrieveTradeContext(tradeId: string | null, pageUrl: string, signal?: AbortSignal): Promise<ShareContext> {
   if (!tradeId) throw new Error("Open a specific trade from this Fomo profile so the URL contains a tradeId, then open Wicklapse again.");
   window.dispatchEvent(new Event("wicklapse:fomo-snapshot-request"));
@@ -103,6 +128,30 @@ async function retrieveTradeContext(tradeId: string | null, pageUrl: string, sig
   while (!signal?.aborted && Date.now() < deadline) {
     const context = capturedContext(pageUrl, tradeId);
     if (context) {
+      if (context.tokenMint && context.tradeExecutions?.length) {
+        const sessionCapture = [...captures].reverse().find((capture) => {
+          try {
+            const url = new URL(capture.url);
+            return url.origin === "https://fomo-api.mobula.io"
+              && url.pathname === "/api/2/token/ohlcv-history"
+              && isCandleCaptureForToken(capture, context.tokenMint!);
+          } catch {
+            return false;
+          }
+        });
+        const focusedUrl = sessionCapture && focusedFomoCandleUrl(
+          sessionCapture.url,
+          context.tradeExecutions,
+          context.positionStatus === "open" ? Date.now() / 1_000 : undefined,
+        );
+        const focusedCapture = focusedUrl ? await requestFocusedCandles(focusedUrl, signal) : null;
+        const focusedCandles = parseFomoCandles(focusedCapture?.payload);
+        if (focusedCandles.length >= 2) {
+          const enriched = ShareContextSchema.parse({ ...context, capturedCandles: focusedCandles });
+          await saveShareContext(enriched);
+          return enriched;
+        }
+      }
       await saveShareContext(context);
       return context;
     }
@@ -171,8 +220,18 @@ export default defineContentScript({
 
     const handleWindowMessage = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== location.origin) return;
-      const data = event.data as { source?: unknown; type?: unknown; capture?: unknown };
-      if (data?.source !== FOMO_BRIDGE_MESSAGE_SOURCE || data.type !== "capture") return;
+      const data = event.data as { source?: unknown; type?: unknown; requestId?: unknown; capture?: unknown; error?: unknown };
+      if (data?.source !== FOMO_BRIDGE_MESSAGE_SOURCE) return;
+      if (data.type === "focused-candle-response" && typeof data.requestId === "string") {
+        const pending = pendingCandleRequests.get(data.requestId);
+        if (!pending) return;
+        const capture = data.capture as Partial<FomoCapturedResponse> | undefined;
+        pending.resolve(capture && typeof capture.url === "string" && typeof capture.capturedAt === "number" && "payload" in capture
+          ? capture as FomoCapturedResponse
+          : null);
+        return;
+      }
+      if (data.type !== "capture") return;
       const capture = data.capture as Partial<FomoCapturedResponse>;
       if (typeof capture.url !== "string" || typeof capture.capturedAt !== "number" || !("payload" in capture)) return;
       retainCapture(capture as FomoCapturedResponse);
@@ -204,6 +263,7 @@ export default defineContentScript({
       observer.disconnect();
       window.removeEventListener("message", handleWindowMessage);
       browser.runtime.onMessage.removeListener(handleRuntimeMessage);
+      for (const pending of pendingCandleRequests.values()) pending.resolve(null);
       closeOverlay();
     });
   },

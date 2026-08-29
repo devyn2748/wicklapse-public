@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildFomoExecutionEpisodes } from "./fomo-capture";
-import { fomoHandleFromUrl, fomoTradeIdFromUrl, parseFomoCandles, parseFomoTradeResponse } from "./fomo-api";
+import { fomoHandleFromUrl, fomoTradeIdFromUrl, focusedFomoCandleUrl, parseFomoCandles, parseFomoTradeResponse } from "./fomo-api";
 import { buildReplayPoints } from "./episodes";
 
 const tradeId = "0244bb85-1d2e-444e-ba64-a532a7ccaccc";
@@ -101,6 +101,21 @@ describe("Fomo capture", () => {
       { timestamp: 1_777_000_000, openSol: "0.1", highSol: "0.12", lowSol: "0.09", closeSol: "0.11", volume: "10" },
       { timestamp: 1_777_000_001, openSol: "0.11", highSol: "0.13", lowSol: "0.1", closeSol: "0.12", volume: "20" },
     ]);
+  });
+
+  it("builds an automatic trade-scoped candle request from Fomo's session request", () => {
+    const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
+    const focused = focusedFomoCandleUrl(
+      `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1d&usd=true&from=1&to=2&amount=10`,
+      context.tradeExecutions!,
+    );
+    const url = new URL(focused!);
+    expect(url.searchParams.get("address")).toBe(tokenAddress);
+    expect(url.searchParams.get("chainId")).toBe("evm:8453");
+    expect(url.searchParams.get("period")).toBe("5s");
+    expect(url.searchParams.get("amount")).toBe("1000");
+    expect(Number(url.searchParams.get("from"))).toBeLessThan(Date.parse("2026-08-28T16:00:00.000Z"));
+    expect(Number(url.searchParams.get("to"))).toBeGreaterThan(Date.parse("2026-08-28T16:05:00.000Z"));
   });
 
   it("rejects responses that do not contain the requested trade", () => {

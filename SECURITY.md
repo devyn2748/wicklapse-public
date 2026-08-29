@@ -12,4 +12,8 @@ Include the affected version, expected and observed behavior, reproduction steps
 
 ## Security model
 
-Wicklapse renders locally and has no project-operated backend. It handles only public wallet and blockchain data during its standard Axiom flow. RPC API keys can be stored locally only when the user selects the remember option; Wicklapse never needs a wallet private key or seed phrase.
+Wicklapse renders locally and has no project-operated backend. It handles public wallet and blockchain data during its standard Axiom flow and the selected trade data returned to an authenticated Fomo page.
+
+Focused Fomo candle requests are restricted to Mobula's candle endpoint, the token and chain from Fomo's own active chart request, supported intervals, and at most 1,000 candles. The request template remains inside the Fomo page closure: Wicklapse does not extract, log, persist, postMessage, or forward its credential. Only the returned candle payload is passed to the renderer.
+
+RPC API keys can be stored locally only when the user selects the remember option; Wicklapse never needs a wallet private key or seed phrase.

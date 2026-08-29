@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
 import { normalizeWalletAddresses } from "./axiom-api";
+import { BUNDLED_BACKDROPS, loadBundledBackdrop } from "./backdrops";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
@@ -26,7 +27,7 @@ interface InstantOverlayProps {
 
 type View = "booting" | "instant" | "error";
 
-function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSettings }): JSX.Element {
+function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: ImageBitmap | null }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<AudioContext | null>(null);
   const previousProgressRef = useRef(0);
@@ -87,8 +88,9 @@ function Preview({ spec, settings }: { spec: ReplaySpec; settings: StudioSetting
       marketCapThreshold: settings.marketCapThreshold,
       width: canvas.width,
       height: canvas.height,
+      backgroundImage,
     }, next);
-  }, [settings, spec]);
+  }, [backgroundImage, settings, spec]);
 
   useEffect(() => draw(progress), [draw, progress]);
   useEffect(() => {
@@ -176,6 +178,8 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   const [fallbackWalletInput, setFallbackWalletInput] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
+  const backgroundImageRef = useRef<ImageBitmap | null>(null);
 
   const buildCapturedReplay = useCallback(async (
     candleInterval: CandleIntervalPreference = "auto",
@@ -249,6 +253,27 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   useEffect(() => {
     if (view === "instant") void saveStudioSettings(settings);
   }, [settings, view]);
+
+  useEffect(() => {
+    let active = true;
+    void loadBundledBackdrop(settings.backgroundStyle, settings.aspectRatio).then((image) => {
+      if (!active) {
+        image?.close();
+        return;
+      }
+      backgroundImageRef.current?.close();
+      backgroundImageRef.current = image;
+      setBackgroundImage(image);
+    }).catch(() => {
+      if (!active) return;
+      backgroundImageRef.current?.close();
+      backgroundImageRef.current = null;
+      setBackgroundImage(null);
+    });
+    return () => { active = false; };
+  }, [settings.aspectRatio, settings.backgroundStyle]);
+
+  useEffect(() => () => backgroundImageRef.current?.close(), []);
 
   const patch = <K extends keyof StudioSettings>(key: K, value: StudioSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -341,6 +366,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         width: settings.aspectRatio === "9:16" ? 1080 : 1920,
         height: settings.aspectRatio === "9:16" ? 1920 : 1080,
         fps: 30,
+        backgroundImage,
       };
       const result = await exportReplayVideo(spec, config, {
         buySound: settings.buySound,
@@ -399,7 +425,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button>}</div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
-          <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} /></section>
+          <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} /></section>
           <section className="wick-controls">
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value)} /></div>
@@ -428,6 +454,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     <option value="solid">Solid Color</option>
     <option value="grid">Retro Grid</option>
     <option value="particles">Particles</option>
+    {BUNDLED_BACKDROPS.map((backdrop) => <option key={backdrop.value} value={backdrop.value}>{backdrop.label}</option>)}
   </select>
 </div>
             <div className="wick-control-grid wick-audio-grid">

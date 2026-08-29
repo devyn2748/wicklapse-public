@@ -34,7 +34,7 @@ const forbiddenFilenames = new Set([".DS_Store", "Thumbs.db"]);
 const forbiddenExtensions = new Set([".key", ".p12", ".pem", ".pfx"]);
 const rules = [
   ["email address", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
-  ["local home-directory path", /(?:\/Users\/[^/\s"']+|\/home\/[^/\s"']+|[A-Z]:\\Users\\[^\\\s"']+)/i],
+  ["local home-directory path", /(?:^|[\s"'`(=])(?:\/Users\/[^/\s"']+|\/home\/[^/\s"']+|[A-Z]:\\Users\\[^\\\s"']+)/im],
   ["private-key block", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
   ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ["GitHub token", /\bgh[oprsu]_[A-Za-z0-9]{20,}\b/],

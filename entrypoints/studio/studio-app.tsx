@@ -19,6 +19,7 @@ import {
   type TradeFill,
 } from "../../src/domain";
 import { normalizeWalletAddresses } from "../../src/axiom-api";
+import { BUNDLED_BACKDROPS, loadBundledBackdrop } from "../../src/backdrops";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildProviderExecutionEpisodes } from "../../src/provider-capture";
 import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
@@ -37,7 +38,7 @@ import {
   saveStudioSettings,
   saveTradingWalletAddresses,
 } from "../../src/storage";
-import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "../../src/studio-settings";
+import { ASPECT_PRESETS, DEFAULT_STUDIO_SETTINGS, type BackgroundStyle, type StudioSettings } from "../../src/studio-settings";
 
 type Stage = "connect" | "confirm" | "studio";
 const DEMO_MINT = "3".repeat(44);
@@ -397,6 +398,8 @@ export function StudioApp(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
+  const [bundledBackgroundImage, setBundledBackgroundImage] = useState<ImageBitmap | null>(null);
+  const bundledBackgroundRef = useRef<ImageBitmap | null>(null);
   const [musicBuffer, setMusicBuffer] = useState<AudioBuffer | null>(null);
   const [musicStart, setMusicStart] = useState(0);
   const [buyCustomBuffer, setBuyCustomBuffer] = useState<AudioBuffer | null>(null);
@@ -436,6 +439,28 @@ export function StudioApp(): JSX.Element {
 
   useEffect(() => () => replayRequestRef.current.cancel(), []);
   useEffect(() => () => backgroundImage?.close(), [backgroundImage]);
+  useEffect(() => {
+    let active = true;
+    const orientation = settings.height > settings.width ? "9:16" : "16:9";
+    void loadBundledBackdrop(settings.backgroundStyle, orientation).then((image) => {
+      if (!active) {
+        image?.close();
+        return;
+      }
+      bundledBackgroundRef.current?.close();
+      bundledBackgroundRef.current = image;
+      setBundledBackgroundImage(image);
+    }).catch(() => {
+      if (!active) return;
+      bundledBackgroundRef.current?.close();
+      bundledBackgroundRef.current = null;
+      setBundledBackgroundImage(null);
+    });
+    return () => { active = false; };
+  }, [settings.backgroundStyle, settings.height, settings.width]);
+  useEffect(() => () => bundledBackgroundRef.current?.close(), []);
+
+  const effectiveBackgroundImage = backgroundImage ?? bundledBackgroundImage;
 
   const selectedEpisode = episodes.find((episode) => episode.id === selectedEpisodeId) ?? episodes[0] ?? null;
   const allowedCandleIntervals = useMemo(
@@ -666,7 +691,7 @@ export function StudioApp(): JSX.Element {
         width: settings.width,
         height: settings.height,
         fps: settings.fps,
-        backgroundImage,
+        backgroundImage: effectiveBackgroundImage,
       };
       const result = await exportReplayVideo(
         spec,
@@ -920,7 +945,7 @@ export function StudioApp(): JSX.Element {
               <div><span>Guides: Safe Areas ON</span><b>85%</b></div>
             </div>
             <div className="canvas-stage">
-              <PreviewCanvas key={`${spec.id}:${JSON.stringify(settings)}:${previewRevision}:${musicStart}`} spec={spec} settings={settings} backgroundImage={backgroundImage} buyCustomBuffer={buyCustomBuffer} sellCustomBuffer={sellCustomBuffer} />
+              <PreviewCanvas key={`${spec.id}:${JSON.stringify(settings)}:${previewRevision}:${musicStart}`} spec={spec} settings={settings} backgroundImage={effectiveBackgroundImage} buyCustomBuffer={buyCustomBuffer} sellCustomBuffer={sellCustomBuffer} />
             </div>
             {musicBuffer && <MusicTrimmer buffer={musicBuffer} clipDuration={settings.duration} start={musicStart} onStartChange={setMusicStart} />}
           </section>
@@ -933,7 +958,7 @@ export function StudioApp(): JSX.Element {
               <label className="inspector-label">Aspect ratio preset</label>
               <div className="aspect-presets">{ASPECT_PRESETS.map((preset) => <button type="button" key={preset.label} className={settings.width === preset.width && settings.height === preset.height ? "selected" : ""} onClick={() => {
                 setSettings((current) => {
-                  const next = { ...current, width: preset.width, height: preset.height };
+                  const next = { ...current, width: preset.width, height: preset.height, aspectRatio: preset.height > preset.width ? "9:16" as const : "16:9" as const };
                   void saveStudioSettings(next);
                   return next;
                 });
@@ -976,6 +1001,10 @@ export function StudioApp(): JSX.Element {
 
             <section className="inspector-card" id="advanced-background">
               <h3>▧ Background & Media</h3>
+              <label>Packaged backdrop<select value={settings.backgroundStyle} onChange={(event) => {
+                setBackgroundImage(null);
+                patchSettings("backgroundStyle", event.target.value as BackgroundStyle);
+              }}><option value="glow">Ambient Glow</option><option value="solid">Solid Color</option><option value="grid">Retro Grid</option><option value="particles">Particles</option>{BUNDLED_BACKDROPS.map((backdrop) => <option key={backdrop.value} value={backdrop.value}>{backdrop.label}</option>)}</select></label>
               <div className="media-upload-grid"><label>Background image<input type="file" accept="image/*" onChange={(event) => void loadBackground(event)} /></label><label>Custom music<input type="file" accept="audio/*" onChange={(event) => void loadMusic(event)} /></label></div>
             </section>
 

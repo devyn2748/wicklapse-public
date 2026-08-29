@@ -10,6 +10,22 @@ export interface FomoCapturedResponse {
   requestBody?: unknown;
 }
 
+const FOMO_CANDLE_PERIODS = [
+  { period: "1s", seconds: 1 },
+  { period: "5s", seconds: 5 },
+  { period: "15s", seconds: 15 },
+  { period: "30s", seconds: 30 },
+  { period: "1m", seconds: 60 },
+  { period: "5m", seconds: 300 },
+  { period: "15m", seconds: 900 },
+  { period: "30m", seconds: 1_800 },
+  { period: "1h", seconds: 3_600 },
+  { period: "4h", seconds: 14_400 },
+  { period: "12h", seconds: 43_200 },
+  { period: "1d", seconds: 86_400 },
+  { period: "1w", seconds: 604_800 },
+] as const;
+
 type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): JsonRecord | null {
@@ -223,6 +239,40 @@ export function parseFomoCandles(payload: unknown): ReplayCandle[] {
       volume: decimalString(Math.max(0, volume)),
     }];
   }).sort((left, right) => left.timestamp - right.timestamp);
+}
+
+/** Builds a bounded Mobula request around the selected trade without changing its token or chain. */
+export function focusedFomoCandleUrl(
+  capturedUrl: string,
+  executions: TradeExecution[],
+  openPositionEndTimestamp?: number,
+): string | null {
+  let url: URL;
+  try {
+    url = new URL(capturedUrl);
+  } catch {
+    return null;
+  }
+  if (url.origin !== "https://fomo-api.mobula.io" || url.pathname !== "/api/2/token/ohlcv-history") return null;
+  if (!url.searchParams.get("address") || !url.searchParams.get("chainId") || !executions.length) return null;
+  const timestamps = executions.map((execution) => execution.timestamp).filter(Number.isFinite);
+  if (!timestamps.length) return null;
+  const tradeStart = Math.min(...timestamps);
+  const latestExecution = Math.max(...timestamps);
+  const tradeEnd = Math.max(latestExecution, openPositionEndTimestamp ?? latestExecution);
+  const tradeSpan = Math.max(1, tradeEnd - tradeStart);
+  const padding = Math.max(30, tradeSpan * 0.15);
+  const fromSeconds = Math.max(0, Math.floor(tradeStart - padding));
+  const toSeconds = Math.ceil(tradeEnd + padding);
+  const windowSeconds = Math.max(1, toSeconds - fromSeconds);
+  const targetPeriod = FOMO_CANDLE_PERIODS.find((candidate) => windowSeconds / candidate.seconds <= 240)
+    ?? FOMO_CANDLE_PERIODS.at(-1)!;
+  url.searchParams.set("period", targetPeriod.period);
+  url.searchParams.set("usd", "true");
+  url.searchParams.set("from", String(fromSeconds * 1_000));
+  url.searchParams.set("to", String(toSeconds * 1_000));
+  url.searchParams.set("amount", "1000");
+  return url.toString();
 }
 
 export function parseFomoTradeResponse(

@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import type { Currency, ReplayPoint, ReplaySpec, TradeFill } from "./domain";
 
 export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset" | "matrix" | "hacker";
-export type BackgroundStyle = "glow" | "solid" | "grid" | "particles";
+export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
 
@@ -507,10 +507,22 @@ function drawBackground(
 
   context.fillStyle = theme.background;
   context.fillRect(0, 0, width, height);
-  
+
   const style = config.backgroundStyle || "glow";
 
-  if (style === "glow") {
+  if (config.backgroundImage) {
+    const image = config.backgroundImage as ImageBitmap;
+    const sourceWidth = image.width;
+    const sourceHeight = image.height;
+    if (sourceWidth > 0 && sourceHeight > 0) {
+      const scale = Math.max(width / sourceWidth, height / sourceHeight);
+      const drawWidth = sourceWidth * scale;
+      const drawHeight = sourceHeight * scale;
+      context.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+      context.fillStyle = "rgba(0, 0, 0, .34)";
+      context.fillRect(0, 0, width, height);
+    }
+  } else if (style === "glow") {
     if (isLandscape) {
       const glow1 = context.createRadialGradient(width - 64 * unit, -64 * unit, 0, width - 64 * unit, -64 * unit, 480 * unit);
       glow1.addColorStop(0, `${theme.positive}22`);
