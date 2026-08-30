@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReplaySpec, TradeFill } from "./domain";
-import { chartReferenceLines, drawExecutionIndicators, type TradeIndicatorStyle } from "./renderer";
+import { chartReferenceLines, drawExecutionIndicators } from "./renderer";
 
 function fill(signature: string, side: "buy" | "sell", timestamp: number, amount: string, price: string): TradeFill {
   return {
@@ -27,6 +27,8 @@ const fills = [
 
 const spec = {
   episode: { fills, startTimestamp: 100, endTimestamp: 150 },
+  chartStartTimestamp: 100,
+  chartEndTimestamp: 150,
   candles: [{ timestamp: 100, openSol: "1", highSol: "9.96", lowSol: "0.9", closeSol: "2", volume: "1" }],
   marketCapMultiplier: "10",
   athMarketCapUsd: "100",
@@ -84,15 +86,29 @@ describe("trade indicator visibility", () => {
   const xForTime = (timestamp: number) => 100 + timestamp;
   const yForPrice = (price: number) => 400 - price * 20;
 
-  it.each(["feed", "markers"] as TradeIndicatorStyle[])("keeps %s labels visible after executions", (style) => {
+  it("renders feed text at execution time with a large outlined treatment", () => {
     const { context, calls } = recordedContext();
-    drawExecutionIndicators(context, spec, style, 10_000, xForTime, yForPrice, plot, 1, theme);
+    const fillProgress = 0.5;
+    drawExecutionIndicators(context, spec, "feed", fillProgress, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    expect(calls.some((call) => call.method === "fillText")).toBe(true);
+    expect(calls.some((call) => call.method === "strokeText")).toBe(true);
+  });
+
+  it("keeps marker labels visible after executions", () => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, "markers", 1, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: null, chartTrailSeconds: null,
+    }, 10_000, xForTime, yForPrice, plot, 1, theme);
     expect(calls.some((call) => call.method === "fillText")).toBe(true);
   });
 
   it("keeps minimal markers large, outlined, and guided after executions", () => {
     const { context, calls } = recordedContext();
-    drawExecutionIndicators(context, spec, "minimal", 10_000, xForTime, yForPrice, plot, 1, theme);
+    drawExecutionIndicators(context, spec, "minimal", 1, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: null, chartTrailSeconds: null,
+    }, 10_000, xForTime, yForPrice, plot, 1, theme);
     const radii = calls.filter((call) => call.method === "arc").map((call) => Number(call.args[2]));
     expect(Math.max(...radii)).toBeGreaterThanOrEqual(8);
     expect(calls.some((call) => call.method === "stroke")).toBe(true);

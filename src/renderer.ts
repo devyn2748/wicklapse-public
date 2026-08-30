@@ -494,6 +494,8 @@ export function drawExecutionIndicators(
   context: CanvasRenderingContext2D,
   spec: ReplaySpec,
   style: TradeIndicatorStyle,
+  videoProgress: number,
+  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds">,
   activeTimestamp: number,
   xForTime: (timestamp: number) => number,
   yForPrice: (price: number) => number,
@@ -562,48 +564,47 @@ export function drawExecutionIndicators(
   }
 
   if (style === "feed") {
-    type FeedGroup = { side: "buy" | "sell"; last: number; total: Decimal; count: number };
-    const groups: FeedGroup[] = [];
-    for (const entry of executions) {
-      const previous = groups.at(-1);
-      const value = new Decimal(entry.fill.quoteLamports).div(entry.fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
-      if (previous && previous.side === entry.fill.side && entry.fill.timestamp - previous.last <= 0.4) {
-        previous.last = entry.fill.timestamp;
-        previous.total = previous.total.plus(value);
-        previous.count += 1;
-      } else {
-        groups.push({ side: entry.fill.side, last: entry.fill.timestamp, total: value, count: 1 });
-      }
-    }
-    const visible = groups.slice(-5);
-    const panelWidth = Math.min(270 * unit, plot.width * 0.42);
-    const rowHeight = 43 * unit;
+    const lifetimeSeconds = 1.45;
+    const visible = executions.map((entry) => {
+      const eventAt = replayEventVisualProgress(
+        entry.fill,
+        spec,
+        config.width,
+        config.height,
+        config.duration,
+        config.chartLeadSeconds,
+        config.chartTrailSeconds,
+      );
+      return { ...entry, ageSeconds: (videoProgress - eventAt) * config.duration };
+    }).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds);
     context.save();
-    context.font = `900 ${21 * unit}px ui-monospace, SFMono-Regular, monospace`;
     context.textBaseline = "middle";
-    for (let i = 0; i < visible.length; i += 1) {
-      const group = visible[visible.length - 1 - i]!;
-      const y = plot.y + plot.height - 25 * unit - i * rowHeight;
-      const color = group.side === "buy" ? theme.positive : theme.negative;
-      const x = plot.x + 14 * unit;
-      context.globalAlpha = i === 0 ? 1 : Math.max(0.72, 0.94 - i * 0.06);
-      context.fillStyle = theme.panelStrong;
-      roundedRect(context, x, y - 17 * unit, panelWidth, 36 * unit, 9 * unit);
-      context.fill();
-      context.strokeStyle = `${color}d9`;
-      context.lineWidth = 2 * unit;
-      context.stroke();
+    context.textAlign = "left";
+    for (let index = 0; index < visible.length; index += 1) {
+      const entry = visible[index]!;
+      const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
+      const local = clamp(entry.ageSeconds / lifetimeSeconds);
+      const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
+      const opacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
+      const rise = (18 + easeInOut(local) * 125 + index * 14) * unit;
+      const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
+      const fontSize = 54 * unit;
+      context.font = `1000 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+      const width = context.measureText(label).width;
+      const horizontalNudge = ((entry.index % 3) - 1) * 34 * unit;
+      const x = clamp(entry.x - width / 2 + horizontalNudge, plot.x + 12 * unit, plot.x + plot.width - width - 12 * unit);
+      const y = clamp(entry.y - rise, plot.y + fontSize, plot.y + plot.height - fontSize * 0.5);
+      context.globalAlpha = opacity;
+      context.lineJoin = "round";
+      context.lineWidth = 10 * unit;
+      context.strokeStyle = "rgba(0, 0, 0, .92)";
+      context.shadowColor = "rgba(0, 0, 0, .9)";
+      context.shadowBlur = 16 * unit;
+      context.strokeText(label, x, y);
       context.fillStyle = color;
-      context.fillRect(x, y - 17 * unit, 6 * unit, 36 * unit);
-      context.beginPath();
-      context.arc(x + 20 * unit, y + unit, 6 * unit, 0, Math.PI * 2);
-      context.fill();
-      context.fillStyle = color;
-      context.fillText(`${group.side.toUpperCase()}${group.count > 1 ? ` ×${group.count}` : ""}`, x + 34 * unit, y + unit);
-      context.textAlign = "right";
-      context.fillStyle = theme.text;
-      context.fillText(formatMoney(group.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, ""), x + panelWidth - 13 * unit, y + unit);
-      context.textAlign = "left";
+      context.shadowColor = color;
+      context.shadowBlur = 18 * unit;
+      context.fillText(label, x, y);
     }
     context.restore();
     return;
@@ -1142,7 +1143,7 @@ function drawLandscapeReplayFrame(
 
   drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
-  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", activeTimestamp, xForTime, yForPrice, {
+  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", progress, config, activeTimestamp, xForTime, yForPrice, {
     x: plotX, y: plotY, width: plotWidth, height: plotHeight,
   }, unit, theme);
 
@@ -1498,7 +1499,7 @@ function drawPortraitReplayFrame(
 
   drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
-  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", activeTimestamp, xForTime, yForPrice, {
+  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", progress, config, activeTimestamp, xForTime, yForPrice, {
     x: plotX, y: plotY, width: plotWidth, height: plotHeight,
   }, unit, theme);
 
