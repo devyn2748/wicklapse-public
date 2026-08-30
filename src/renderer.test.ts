@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReplaySpec, TradeFill } from "./domain";
-import { chartReferenceLines } from "./renderer";
+import { chartReferenceLines, drawExecutionIndicators, type TradeIndicatorStyle } from "./renderer";
 
 function fill(signature: string, side: "buy" | "sell", timestamp: number, amount: string, price: string): TradeFill {
   return {
@@ -50,5 +50,51 @@ describe("chartReferenceLines", () => {
 
   it("does not invent an ATH when Axiom did not provide one", () => {
     expect(chartReferenceLines({ ...spec, athMarketCapUsd: null }, { showAthLine: true })).toEqual([]);
+  });
+});
+
+describe("trade indicator visibility", () => {
+  function recordedContext() {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const target = {
+      measureText: (text: string) => ({ width: text.length * 10 }),
+      fillText: (...args: unknown[]) => calls.push({ method: "fillText", args }),
+      arc: (...args: unknown[]) => calls.push({ method: "arc", args }),
+      stroke: (...args: unknown[]) => calls.push({ method: "stroke", args }),
+      fill: (...args: unknown[]) => calls.push({ method: "fill", args }),
+    };
+    const context = new Proxy(target, {
+      get(object, property) {
+        if (property in object) return object[property as keyof typeof object];
+        return (...args: unknown[]) => calls.push({ method: String(property), args });
+      },
+      set(object, property, value) {
+        (object as Record<PropertyKey, unknown>)[property] = value;
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+    return { context, calls };
+  }
+
+  const theme = {
+    background: "#000000", panelStrong: "rgba(0,0,0,.95)", text: "#ffffff",
+    positive: "#00ff99", negative: "#ff3366",
+  } as any;
+  const plot = { x: 0, y: 0, width: 800, height: 500 };
+  const xForTime = (timestamp: number) => 100 + timestamp;
+  const yForPrice = (price: number) => 400 - price * 20;
+
+  it.each(["feed", "markers"] as TradeIndicatorStyle[])("keeps %s labels visible after executions", (style) => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, style, 10_000, xForTime, yForPrice, plot, 1, theme);
+    expect(calls.some((call) => call.method === "fillText")).toBe(true);
+  });
+
+  it("keeps minimal markers large, outlined, and guided after executions", () => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, "minimal", 10_000, xForTime, yForPrice, plot, 1, theme);
+    const radii = calls.filter((call) => call.method === "arc").map((call) => Number(call.args[2]));
+    expect(Math.max(...radii)).toBeGreaterThanOrEqual(8);
+    expect(calls.some((call) => call.method === "stroke")).toBe(true);
   });
 });

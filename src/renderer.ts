@@ -490,7 +490,7 @@ function drawChartReferenceLines(
 type ExecutionPosition = { fill: TradeFill; x: number; y: number; ageMs: number; index: number };
 
 /** Canvas-only execution presentation. Every transient value is reconstructed from replay time. */
-function drawExecutionIndicators(
+export function drawExecutionIndicators(
   context: CanvasRenderingContext2D,
   spec: ReplaySpec,
   style: TradeIndicatorStyle,
@@ -508,27 +508,58 @@ function drawExecutionIndicators(
       ageMs: (activeTimestamp - fill.timestamp) * 1_000,
     }))
     .filter((entry) => entry.ageMs >= 0);
+  const isOnPlot = (entry: ExecutionPosition) => entry.x >= plot.x && entry.x <= plot.x + plot.width
+    && entry.y >= plot.y && entry.y <= plot.y + plot.height;
   const dotRadius = (fill: TradeFill) => {
-    const usd = new Decimal(fill.quoteLamports).div(1_000_000_000).mul(spec.usdPerSol || 0).toNumber();
-    return (usd < 1_000 ? 4 : usd < 10_000 ? 5 : usd < 50_000 ? 6 : 7) * unit;
+    const value = new Decimal(fill.quoteLamports)
+      .div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000)
+      .abs()
+      .toNumber();
+    const scaled = Number.isFinite(value) ? Math.log10(Math.max(1, value)) : 0;
+    return clamp(7 + scaled * 1.25, 7, 13) * unit;
   };
 
   for (const entry of executions) {
+    if (!isOnPlot(entry)) continue;
     const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-    const radius = dotRadius(entry.fill);
+    const radius = dotRadius(entry.fill) * (style === "minimal" ? 1.25 : 1);
     const pulse = clamp(entry.ageMs / 620);
     if (pulse < 1) {
       context.beginPath();
-      context.arc(entry.x, entry.y, radius + (style === "minimal" ? 20 : 16) * unit * pulse, 0, Math.PI * 2);
-      context.fillStyle = `${color}${Math.round((1 - pulse) * 70).toString(16).padStart(2, "0")}`;
-      context.fill();
+      context.arc(entry.x, entry.y, radius + 20 * unit * pulse, 0, Math.PI * 2);
+      context.strokeStyle = `${color}${Math.round((1 - pulse) * 180).toString(16).padStart(2, "0")}`;
+      context.lineWidth = 3 * unit;
+      context.stroke();
     }
+    context.save();
+    context.shadowColor = color;
+    context.shadowBlur = 14 * unit;
     context.beginPath();
-    context.arc(entry.x, entry.y, Math.max(2 * unit, radius * 0.55), 0, Math.PI * 2);
-    context.fillStyle = `${color}${entry.ageMs < 700 ? "ff" : "9c"}`;
+    context.arc(entry.x, entry.y, radius, 0, Math.PI * 2);
+    context.fillStyle = color;
     context.fill();
+    context.shadowBlur = 0;
+    context.lineWidth = Math.max(2 * unit, radius * 0.28);
+    context.strokeStyle = theme.panelStrong;
+    context.stroke();
+    context.restore();
   }
-  if (style === "minimal") return;
+  if (style === "minimal") {
+    for (const entry of executions) {
+      if (!isOnPlot(entry)) continue;
+      const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
+      context.save();
+      context.setLineDash([3 * unit, 7 * unit]);
+      context.strokeStyle = `${color}8f`;
+      context.lineWidth = 2 * unit;
+      context.beginPath();
+      context.moveTo(entry.x, entry.fill.side === "buy" ? entry.y + 13 * unit : plot.y);
+      context.lineTo(entry.x, entry.fill.side === "buy" ? plot.y + plot.height : entry.y - 13 * unit);
+      context.stroke();
+      context.restore();
+    }
+    return;
+  }
 
   if (style === "feed") {
     type FeedGroup = { side: "buy" | "sell"; last: number; total: Decimal; count: number };
@@ -544,25 +575,34 @@ function drawExecutionIndicators(
         groups.push({ side: entry.fill.side, last: entry.fill.timestamp, total: value, count: 1 });
       }
     }
-    const visible = groups.filter((group) => (activeTimestamp - group.last) * 1_000 <= 3_500).slice(-4);
+    const visible = groups.slice(-5);
+    const panelWidth = Math.min(270 * unit, plot.width * 0.42);
+    const rowHeight = 43 * unit;
     context.save();
-    context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.font = `900 ${21 * unit}px ui-monospace, SFMono-Regular, monospace`;
     context.textBaseline = "middle";
     for (let i = 0; i < visible.length; i += 1) {
       const group = visible[visible.length - 1 - i]!;
-      const age = (activeTimestamp - group.last) * 1_000;
-      const enter = easeInOut(clamp(age / 200));
-      const fade = age <= 1_600 ? 1 : 1 - clamp((age - 1_600) / 1_900);
-      const y = plot.y + plot.height - 28 * unit - i * 34 * unit + (1 - enter) * 8 * unit;
+      const y = plot.y + plot.height - 25 * unit - i * rowHeight;
       const color = group.side === "buy" ? theme.positive : theme.negative;
-      context.globalAlpha = fade;
-      context.fillStyle = `${theme.panelStrong}dd`;
-      roundedRect(context, plot.x + 14 * unit, y - 13 * unit, 205 * unit, 27 * unit, 6 * unit);
+      const x = plot.x + 14 * unit;
+      context.globalAlpha = i === 0 ? 1 : Math.max(0.72, 0.94 - i * 0.06);
+      context.fillStyle = theme.panelStrong;
+      roundedRect(context, x, y - 17 * unit, panelWidth, 36 * unit, 9 * unit);
+      context.fill();
+      context.strokeStyle = `${color}d9`;
+      context.lineWidth = 2 * unit;
+      context.stroke();
+      context.fillStyle = color;
+      context.fillRect(x, y - 17 * unit, 6 * unit, 36 * unit);
+      context.beginPath();
+      context.arc(x + 20 * unit, y + unit, 6 * unit, 0, Math.PI * 2);
       context.fill();
       context.fillStyle = color;
-      context.fillText(`${group.side.toUpperCase()}${group.count > 1 ? ` ×${group.count}` : ""}`, plot.x + 25 * unit, y);
+      context.fillText(`${group.side.toUpperCase()}${group.count > 1 ? ` ×${group.count}` : ""}`, x + 34 * unit, y + unit);
       context.textAlign = "right";
-      context.fillText(formatMoney(group.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, ""), plot.x + 207 * unit, y);
+      context.fillStyle = theme.text;
+      context.fillText(formatMoney(group.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, ""), x + panelWidth - 13 * unit, y + unit);
       context.textAlign = "left";
     }
     context.restore();
@@ -570,13 +610,13 @@ function drawExecutionIndicators(
   }
 
   if (style === "markers") {
+    const markerLabels: Array<{ x: number; y: number; width: number; height: number }> = [];
     for (const entry of executions) {
+      if (!isOnPlot(entry)) continue;
       const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
       const above = entry.fill.side === "sell";
-      const arrival = easeInOut(clamp(entry.ageMs / 180));
-      const offset = (1 - arrival) * 7 * unit + (entry.index % 3) * 3 * unit;
-      const y = entry.y + (above ? -offset : offset);
-      const triangle = 7 * unit;
+      const y = entry.y + (above ? -18 : 18) * unit;
+      const triangle = 12 * unit;
       context.save();
       context.translate(entry.x, y);
       context.beginPath();
@@ -588,16 +628,30 @@ function drawExecutionIndicators(
       context.closePath();
       context.fillStyle = color;
       context.shadowColor = color;
-      context.shadowBlur = entry.ageMs < 400 ? (1 - entry.ageMs / 400) * 14 * unit : 0;
+      context.shadowBlur = 18 * unit;
       context.fill();
+      context.shadowBlur = 0;
+      context.strokeStyle = theme.panelStrong;
+      context.lineWidth = 2.5 * unit;
+      context.stroke();
       context.restore();
-      if (entry.ageMs <= 1_000) {
-        context.globalAlpha = 1 - clamp((entry.ageMs - 750) / 250);
-        context.fillStyle = color;
-        context.font = `bold ${19 * unit}px ui-monospace, SFMono-Regular, monospace`;
-        context.fillText(`${above ? "▼" : "▲"} ${compactExecutionValue(entry.fill, spec)}`, entry.x + 11 * unit, y + (above ? -10 : 22) * unit);
-        context.globalAlpha = 1;
-      }
+
+      const label = `${above ? "SELL" : "BUY"} ${compactExecutionValue(entry.fill, spec)}`;
+      context.font = `900 ${18 * unit}px ui-monospace, SFMono-Regular, monospace`;
+      const labelWidth = context.measureText(label).width + 24 * unit;
+      const labelHeight = 32 * unit;
+      const labelX = clamp(entry.x - labelWidth / 2, plot.x + 5 * unit, plot.x + plot.width - labelWidth - 5 * unit);
+      const baseY = entry.y + (above ? -64 : 32) * unit;
+      const labelY = [0, above ? -38 : 38, above ? -76 : 76]
+        .map((offset) => clamp(baseY + offset * unit, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit))
+        .find((candidate) => !markerLabels.some((placed) => labelX < placed.x + placed.width + 5 * unit
+          && labelX + labelWidth + 5 * unit > placed.x
+          && candidate < placed.y + placed.height + 5 * unit
+          && candidate + labelHeight + 5 * unit > placed.y)) ?? clamp(baseY, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit);
+      markerLabels.push({ x: labelX, y: labelY, width: labelWidth, height: labelHeight });
+      drawPill(context, label, labelX, labelY, {
+        fill: theme.panelStrong, stroke: color, color, fontSize: 18 * unit, paddingX: 12 * unit,
+      });
     }
     return;
   }
