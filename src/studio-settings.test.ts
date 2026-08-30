@@ -14,6 +14,7 @@ describe("StudioSettingsSchema", () => {
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "bubbles" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "markers" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "minimal" }).success).toBe(false);
+    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "hype" }).success).toBe(true);
   });
 
   it("defaults execution indicators to the canvas feed", () => {

@@ -144,4 +144,25 @@ describe("trade indicator visibility", () => {
     expect(after.calls.filter((call) => call.method === "fillText")).toHaveLength(3);
   });
 
+  it.each([
+    ["detailed", 3],
+    ["hype", 6],
+  ] as const)("applies the three-item queue to %s indicators", (style, expectedTextCalls) => {
+    const queueFills = [120, 120.5, 121, 122].map((timestamp, index) => ({
+      ...fill(`queue-${index}`, "sell", timestamp, "1", String(3 + index * 0.1)),
+      quoteLamports: String((index + 1) * 1_000_000_000),
+    }));
+    const queueSpec = { ...spec, episode: { ...spec.episode, fills: queueFills } } as ReplaySpec;
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, queueSpec, style, 0.44, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 122, xForTime, yForPrice, plot, 1, theme);
+    const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
+    expect(labels).toHaveLength(expectedTextCalls);
+    if (style === "hype") {
+      expect(labels.filter((label) => label.startsWith("*SELLS "))).toHaveLength(3);
+      expect(labels.filter((label) => label.startsWith("("))).toHaveLength(3);
+    }
+  });
+
 });

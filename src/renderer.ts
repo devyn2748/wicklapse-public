@@ -5,7 +5,7 @@ export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset"
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
-export type TradeIndicatorStyle = "detailed" | "feed";
+export type TradeIndicatorStyle = "detailed" | "feed" | "hype";
 
 export interface RenderConfig {
   duration: number;
@@ -509,7 +509,29 @@ export function drawExecutionIndicators(
       fill, index, x: xForTime(fill.timestamp), y: yForPrice(Number(fill.estimatedPriceSol || 0)),
       ageMs: (activeTimestamp - fill.timestamp) * 1_000,
     }));
-  const executions = positioned.filter((entry) => entry.ageMs >= 0);
+  const timed = positioned.map((entry) => {
+    const eventAt = replayEventVisualProgress(
+      entry.fill,
+      spec,
+      config.width,
+      config.height,
+      config.duration,
+      config.chartLeadSeconds,
+      config.chartTrailSeconds,
+    );
+    return { ...entry, eventAt, ageSeconds: (videoProgress - eventAt) * config.duration };
+  }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
+  const activeQueue = timed.filter((entry) => entry.ageSeconds >= 0).slice(-3);
+  const upcoming = timed.find((entry) => entry.eventAt > videoProgress);
+  const preFadeSeconds = 0.22;
+  const secondsUntilNext = upcoming ? (upcoming.eventAt - videoProgress) * config.duration : Number.POSITIVE_INFINITY;
+  const replacementOpacity = (index: number, visibleCount: number) => (
+    index === 0 && visibleCount === 3 && secondsUntilNext <= preFadeSeconds
+      ? clamp(secondsUntilNext / preFadeSeconds)
+      : 1
+  );
+  const styleLifetime = style === "detailed" ? Number.POSITIVE_INFINITY : style === "hype" ? 1.35 : 1.45;
+  const visibleQueue = activeQueue.filter((entry) => entry.ageSeconds <= styleLifetime);
   const isOnPlot = (entry: ExecutionPosition) => entry.x >= plot.x && entry.x <= plot.x + plot.width
     && entry.y >= plot.y && entry.y <= plot.y + plot.height;
   const dotRadius = (fill: TradeFill) => {
@@ -521,7 +543,8 @@ export function drawExecutionIndicators(
     return clamp(7 + scaled * 1.25, 7, 13) * unit;
   };
 
-  for (const entry of executions) {
+  for (let index = 0; index < visibleQueue.length; index += 1) {
+    const entry = visibleQueue[index]!;
     if (!isOnPlot(entry)) continue;
     const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
     const radius = dotRadius(entry.fill);
@@ -534,6 +557,7 @@ export function drawExecutionIndicators(
       context.stroke();
     }
     context.save();
+    context.globalAlpha = replacementOpacity(index, visibleQueue.length);
     context.shadowColor = color;
     context.shadowBlur = 14 * unit;
     context.beginPath();
@@ -548,26 +572,7 @@ export function drawExecutionIndicators(
   }
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
-    const timed = positioned.map((entry) => {
-      const eventAt = replayEventVisualProgress(
-        entry.fill,
-        spec,
-        config.width,
-        config.height,
-        config.duration,
-        config.chartLeadSeconds,
-        config.chartTrailSeconds,
-      );
-      return { ...entry, eventAt };
-    }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
-    const active = timed.map((entry) => ({
-      ...entry,
-      ageSeconds: (videoProgress - entry.eventAt) * config.duration,
-    })).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds);
-    const visible = active.slice(-3);
-    const upcoming = timed.find((entry) => entry.eventAt > videoProgress);
-    const preFadeSeconds = 0.22;
-    const secondsUntilNext = upcoming ? (upcoming.eventAt - videoProgress) * config.duration : Number.POSITIVE_INFINITY;
+    const visible = visibleQueue;
     const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
     context.save();
     context.textBaseline = "middle";
@@ -578,9 +583,7 @@ export function drawExecutionIndicators(
       const local = clamp(entry.ageSeconds / lifetimeSeconds);
       const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
       const naturalOpacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
-      const replacementFade = index === 0 && active.length >= 3 && secondsUntilNext <= preFadeSeconds
-        ? clamp(secondsUntilNext / preFadeSeconds)
-        : 1;
+      const replacementFade = replacementOpacity(index, visible.length);
       const opacity = naturalOpacity * replacementFade;
       const rise = (18 + easeInOut(local) * 125) * unit;
       const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
@@ -628,8 +631,70 @@ export function drawExecutionIndicators(
     return;
   }
 
+  if (style === "hype") {
+    const slotGap = 126 * unit;
+    context.save();
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    for (let index = 0; index < visibleQueue.length; index += 1) {
+      const entry = visibleQueue[index]!;
+      const entrance = easeInOut(clamp(entry.ageSeconds / 0.12));
+      const naturalOpacity = entry.ageSeconds < 0.86 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.86) / 0.49));
+      const opacity = naturalOpacity * replacementOpacity(index, visibleQueue.length);
+      const value = compactExecutionValue(entry.fill, spec);
+      const isBuy = entry.fill.side === "buy";
+      let topLine: string;
+      let bottomLine: string;
+      if (isBuy) {
+        topLine = `*BUYS ${value}*`;
+        const marketCap = Number(entry.fill.estimatedPriceSol) * Number(spec.marketCapMultiplier ?? 0);
+        bottomLine = Number.isFinite(marketCap) && marketCap > 0
+          ? `(${formatMarketCap(marketCap, "auto").replace(/^\$/, "")} MC)`
+          : `(${spec.symbol} ENTRY)`;
+      } else {
+        const sold = new Decimal(entry.fill.tokenAmountRaw || 0).abs();
+        const remaining = new Decimal(entry.fill.walletPostTokenRaw || 0).abs();
+        const total = sold.plus(remaining);
+        const percentage = total.gt(0) ? sold.div(total).mul(100).toNumber() : 100;
+        const percentLabel = Number.isFinite(percentage) ? `${Math.max(0, Math.min(100, percentage)).toFixed(percentage < 10 ? 1 : 0)}%` : "SELL";
+        topLine = `*SELLS ${percentLabel}*`;
+        bottomLine = `(${value})`;
+      }
+      const centerX = plot.x + plot.width / 2;
+      const centerY = plot.y + plot.height / 2 + (index - (visibleQueue.length - 1) / 2) * slotGap;
+      const scale = 1.18 - entrance * 0.18;
+      context.save();
+      context.globalAlpha = opacity;
+      context.translate(centerX, centerY);
+      context.scale(scale, scale);
+      context.lineJoin = "round";
+      context.font = `1000 ${58 * unit}px ui-sans-serif, system-ui, sans-serif`;
+      context.lineWidth = 13 * unit;
+      context.strokeStyle = "rgba(0, 0, 0, .9)";
+      context.shadowColor = isBuy ? "#39ff14" : "#ff174f";
+      context.shadowBlur = 30 * unit;
+      context.strokeText(topLine, 0, -27 * unit);
+      context.fillStyle = isBuy ? "#39ff14" : "#ff174f";
+      context.fillText(topLine, 0, -27 * unit);
+      context.font = `1000 ${45 * unit}px ui-sans-serif, system-ui, sans-serif`;
+      context.lineWidth = 11 * unit;
+      context.strokeStyle = "rgba(0, 0, 0, .9)";
+      context.shadowColor = "#16d9ff";
+      context.shadowBlur = 26 * unit;
+      context.strokeText(bottomLine, 0, 34 * unit);
+      context.fillStyle = "#16d9ff";
+      context.fillText(bottomLine, 0, 34 * unit);
+      context.restore();
+    }
+    context.restore();
+    return;
+  }
+
   const labels: Array<{ x: number; y: number; width: number; height: number }> = [];
-  for (const entry of executions) {
+  for (let index = 0; index < visibleQueue.length; index += 1) {
+    const entry = visibleQueue[index]!;
+    context.save();
+    context.globalAlpha = replacementOpacity(index, visibleQueue.length);
     const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
     const label = `${entry.fill.side.toUpperCase()} ${compactExecutionValue(entry.fill, spec)}`;
     context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
@@ -655,6 +720,7 @@ export function drawExecutionIndicators(
     context.beginPath(); context.moveTo(entry.x, plot.y); context.lineTo(entry.x, plot.y + plot.height); context.stroke();
     context.setLineDash([]);
     drawPill(context, label, x, y, { fill: theme.panelStrong, stroke: `${color}dd`, color, fontSize: 22 * unit, paddingX: 16 * unit });
+    context.restore();
   }
 }
 
