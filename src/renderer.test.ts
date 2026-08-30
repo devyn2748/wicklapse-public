@@ -96,7 +96,7 @@ describe("trade indicator visibility", () => {
     expect(calls.some((call) => call.method === "strokeText")).toBe(true);
   });
 
-  it("combines rapid same-side executions so sell text cannot overlap", () => {
+  it("keeps rapid same-side executions separate without overlapping", () => {
     const burstFills = [
       fill("sell-burst-1", "sell", 120, "1", "3"),
       fill("sell-burst-2", "sell", 120.5, "1", "3.1"),
@@ -106,8 +106,18 @@ describe("trade indicator visibility", () => {
     drawExecutionIndicators(context, burstSpec, "feed", 0.5, {
       duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
     }, 130, xForTime, yForPrice, plot, 1, theme);
-    const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
-    expect(labels).toEqual([expect.stringContaining("SELL ×2")]);
+    const labels = calls.filter((call) => call.method === "fillText");
+    expect(labels).toHaveLength(2);
+    expect(labels.every((call) => String(call.args[0]).startsWith("SELL "))).toBe(true);
+    expect(labels.every((call) => !String(call.args[0]).includes("×"))).toBe(true);
+    const [first, second] = labels.map((call) => ({
+      x: Number(call.args[1]), y: Number(call.args[2]), width: String(call.args[0]).length * 10,
+    }));
+    const overlaps = first!.x < second!.x + second!.width + 18
+      && first!.x + first!.width + 18 > second!.x
+      && first!.y - 35 < second!.y + 35
+      && first!.y + 35 > second!.y - 35;
+    expect(overlaps).toBe(false);
   });
 
   it("keeps marker labels visible after executions", () => {

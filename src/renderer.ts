@@ -575,30 +575,12 @@ export function drawExecutionIndicators(
         config.chartLeadSeconds,
         config.chartTrailSeconds,
       );
-      const value = new Decimal(entry.fill.quoteLamports)
-        .div(entry.fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
-      return { ...entry, eventAt, value };
+      return { ...entry, eventAt };
     }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
-    type FeedBurst = typeof timed[number] & { count: number; total: Decimal };
-    const bursts: FeedBurst[] = [];
-    for (const entry of timed) {
-      const previous = bursts.at(-1);
-      if (previous && previous.fill.side === entry.fill.side
-        && (entry.eventAt - previous.eventAt) * config.duration <= 0.18) {
-        const nextCount = previous.count + 1;
-        previous.x = (previous.x * previous.count + entry.x) / nextCount;
-        previous.y = (previous.y * previous.count + entry.y) / nextCount;
-        previous.eventAt = entry.eventAt;
-        previous.count = nextCount;
-        previous.total = previous.total.plus(entry.value);
-      } else {
-        bursts.push({ ...entry, count: 1, total: entry.value });
-      }
-    }
-    const visible = bursts.map((burst) => ({
-      ...burst,
-      ageSeconds: (videoProgress - burst.eventAt) * config.duration,
-    })).filter((burst) => burst.ageSeconds >= 0 && burst.ageSeconds <= lifetimeSeconds).slice(-8);
+    const visible = timed.map((entry) => ({
+      ...entry,
+      ageSeconds: (videoProgress - entry.eventAt) * config.duration,
+    })).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds).slice(-8);
     const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
     context.save();
     context.textBaseline = "middle";
@@ -610,8 +592,7 @@ export function drawExecutionIndicators(
       const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
       const opacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
       const rise = (18 + easeInOut(local) * 125) * unit;
-      const amount = formatMoney(entry.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, "");
-      const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"}${entry.count > 1 ? ` ×${entry.count}` : ""} ${amount}`;
+      const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
       const fontSize = 54 * unit;
       const lineHeight = 68 * unit;
       context.font = `1000 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
