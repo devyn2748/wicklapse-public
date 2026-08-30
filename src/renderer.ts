@@ -5,7 +5,7 @@ export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset"
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
-export type TradeIndicatorStyle = "detailed" | "feed" | "markers" | "minimal";
+export type TradeIndicatorStyle = "detailed" | "feed";
 
 export interface RenderConfig {
   duration: number;
@@ -524,7 +524,7 @@ export function drawExecutionIndicators(
   for (const entry of executions) {
     if (!isOnPlot(entry)) continue;
     const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-    const radius = dotRadius(entry.fill) * (style === "minimal" ? 1.25 : 1);
+    const radius = dotRadius(entry.fill);
     const pulse = clamp(entry.ageMs / 620);
     if (pulse < 1) {
       context.beginPath();
@@ -546,23 +546,6 @@ export function drawExecutionIndicators(
     context.stroke();
     context.restore();
   }
-  if (style === "minimal") {
-    for (const entry of executions) {
-      if (!isOnPlot(entry)) continue;
-      const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-      context.save();
-      context.setLineDash([3 * unit, 7 * unit]);
-      context.strokeStyle = `${color}8f`;
-      context.lineWidth = 2 * unit;
-      context.beginPath();
-      context.moveTo(entry.x, entry.fill.side === "buy" ? entry.y + 13 * unit : plot.y);
-      context.lineTo(entry.x, entry.fill.side === "buy" ? plot.y + plot.height : entry.y - 13 * unit);
-      context.stroke();
-      context.restore();
-    }
-    return;
-  }
-
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
     const timed = executions.map((entry) => {
@@ -634,53 +617,6 @@ export function drawExecutionIndicators(
       context.fillText(label, x, y);
     }
     context.restore();
-    return;
-  }
-
-  if (style === "markers") {
-    const markerLabels: Array<{ x: number; y: number; width: number; height: number }> = [];
-    for (const entry of executions) {
-      if (!isOnPlot(entry)) continue;
-      const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-      const above = entry.fill.side === "sell";
-      const y = entry.y + (above ? -18 : 18) * unit;
-      const triangle = 12 * unit;
-      context.save();
-      context.translate(entry.x, y);
-      context.beginPath();
-      if (above) {
-        context.moveTo(0, triangle); context.lineTo(-triangle, -triangle); context.lineTo(triangle, -triangle);
-      } else {
-        context.moveTo(0, -triangle); context.lineTo(-triangle, triangle); context.lineTo(triangle, triangle);
-      }
-      context.closePath();
-      context.fillStyle = color;
-      context.shadowColor = color;
-      context.shadowBlur = 18 * unit;
-      context.fill();
-      context.shadowBlur = 0;
-      context.strokeStyle = theme.panelStrong;
-      context.lineWidth = 2.5 * unit;
-      context.stroke();
-      context.restore();
-
-      const label = `${above ? "SELL" : "BUY"} ${compactExecutionValue(entry.fill, spec)}`;
-      context.font = `900 ${18 * unit}px ui-monospace, SFMono-Regular, monospace`;
-      const labelWidth = context.measureText(label).width + 24 * unit;
-      const labelHeight = 32 * unit;
-      const labelX = clamp(entry.x - labelWidth / 2, plot.x + 5 * unit, plot.x + plot.width - labelWidth - 5 * unit);
-      const baseY = entry.y + (above ? -64 : 32) * unit;
-      const labelY = [0, above ? -38 : 38, above ? -76 : 76]
-        .map((offset) => clamp(baseY + offset * unit, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit))
-        .find((candidate) => !markerLabels.some((placed) => labelX < placed.x + placed.width + 5 * unit
-          && labelX + labelWidth + 5 * unit > placed.x
-          && candidate < placed.y + placed.height + 5 * unit
-          && candidate + labelHeight + 5 * unit > placed.y)) ?? clamp(baseY, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit);
-      markerLabels.push({ x: labelX, y: labelY, width: labelWidth, height: labelHeight });
-      drawPill(context, label, labelX, labelY, {
-        fill: theme.panelStrong, stroke: color, color, fontSize: 18 * unit, paddingX: 12 * unit,
-      });
-    }
     return;
   }
 

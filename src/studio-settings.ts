@@ -65,7 +65,7 @@ export const StudioSettingsSchema = z.object({
   chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
   showAverageBuyLine: z.boolean(),
   showAverageSellLine: z.boolean(),
-  tradeIndicatorStyle: z.enum(["detailed", "feed", "markers", "minimal"]),
+  tradeIndicatorStyle: z.enum(["detailed", "feed"]),
   showAthLine: z.boolean(),
   affiliateLink: z.string(),
   speedrunMode: z.boolean(),

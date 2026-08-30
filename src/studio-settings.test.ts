@@ -12,6 +12,8 @@ describe("StudioSettingsSchema", () => {
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, buySound: "missing-file" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, candleInterval: "2s" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "bubbles" }).success).toBe(false);
+    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "markers" }).success).toBe(false);
+    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "minimal" }).success).toBe(false);
   });
 
   it("defaults execution indicators to the canvas feed", () => {

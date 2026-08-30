@@ -120,21 +120,4 @@ describe("trade indicator visibility", () => {
     expect(overlaps).toBe(false);
   });
 
-  it("keeps marker labels visible after executions", () => {
-    const { context, calls } = recordedContext();
-    drawExecutionIndicators(context, spec, "markers", 1, {
-      duration: 8, width: 1920, height: 1080, chartLeadSeconds: null, chartTrailSeconds: null,
-    }, 10_000, xForTime, yForPrice, plot, 1, theme);
-    expect(calls.some((call) => call.method === "fillText")).toBe(true);
-  });
-
-  it("keeps minimal markers large, outlined, and guided after executions", () => {
-    const { context, calls } = recordedContext();
-    drawExecutionIndicators(context, spec, "minimal", 1, {
-      duration: 8, width: 1920, height: 1080, chartLeadSeconds: null, chartTrailSeconds: null,
-    }, 10_000, xForTime, yForPrice, plot, 1, theme);
-    const radii = calls.filter((call) => call.method === "arc").map((call) => Number(call.args[2]));
-    expect(Math.max(...radii)).toBeGreaterThanOrEqual(8);
-    expect(calls.some((call) => call.method === "stroke")).toBe(true);
-  });
 });

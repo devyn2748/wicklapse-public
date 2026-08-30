@@ -84,19 +84,23 @@ export async function loadProject(): Promise<StudioProject | null> {
 }
 
 export async function saveStudioSettings(settings: StudioSettings): Promise<void> {
-  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 7, settings: StudioSettingsSchema.parse(settings) } });
+  await browser.storage.local.set({ [KEYS.studioSettings]: { version: 8, settings: StudioSettingsSchema.parse(settings) } });
 }
 
 export async function loadStudioSettings(): Promise<StudioSettings> {
   const result = await browser.storage.local.get(KEYS.studioSettings);
   const value = result[KEYS.studioSettings];
   const version = value && typeof value === "object" ? (value as { version?: number }).version : undefined;
-  if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7) {
+  if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) {
     return DEFAULT_STUDIO_SETTINGS;
+  }
+  const storedSettings = { ...((value as { settings?: Partial<StudioSettings> }).settings ?? {}) } as Record<string, unknown>;
+  if (storedSettings.tradeIndicatorStyle === "markers" || storedSettings.tradeIndicatorStyle === "minimal") {
+    storedSettings.tradeIndicatorStyle = "feed";
   }
   const parsed = StudioSettingsSchema.safeParse({
     ...DEFAULT_STUDIO_SETTINGS,
-    ...((value as { settings?: Partial<StudioSettings> }).settings ?? {}),
+    ...storedSettings,
   });
   return parsed.success ? parsed.data : DEFAULT_STUDIO_SETTINGS;
 }
