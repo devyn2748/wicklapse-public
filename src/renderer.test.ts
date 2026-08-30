@@ -72,6 +72,7 @@ describe("trade indicator visibility", () => {
       },
       set(object, property, value) {
         (object as Record<PropertyKey, unknown>)[property] = value;
+        calls.push({ method: `set:${String(property)}`, args: [value] });
         return true;
       },
     }) as unknown as CanvasRenderingContext2D;
@@ -118,6 +119,29 @@ describe("trade indicator visibility", () => {
       && first!.y - 35 < second!.y + 35
       && first!.y + 35 > second!.y - 35;
     expect(overlaps).toBe(false);
+  });
+
+  it("shows at most three feed labels and pre-fades the oldest before replacement", () => {
+    const queueFills = [120, 120.5, 121, 122].map((timestamp, index) => ({
+      ...fill(`sell-queue-${index}`, "sell", timestamp, "1", String(3 + index * 0.1)),
+      quoteLamports: String((index + 1) * 1_000_000_000),
+    }));
+    const queueSpec = { ...spec, episode: { ...spec.episode, fills: queueFills } } as ReplaySpec;
+    const before = recordedContext();
+    drawExecutionIndicators(before.context, queueSpec, "feed", 0.4275, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 121.5, xForTime, yForPrice, plot, 1, theme);
+    expect(before.calls.filter((call) => call.method === "fillText")).toHaveLength(3);
+    const opacities = before.calls.filter((call) => call.method === "set:globalAlpha").map((call) => Number(call.args[0]));
+    expect(opacities[0]).toBeLessThan(0.6);
+    expect(opacities[1]).toBeGreaterThan(0.9);
+    expect(opacities[2]).toBeGreaterThan(0);
+
+    const after = recordedContext();
+    drawExecutionIndicators(after.context, queueSpec, "feed", 0.44, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 122, xForTime, yForPrice, plot, 1, theme);
+    expect(after.calls.filter((call) => call.method === "fillText")).toHaveLength(3);
   });
 
 });

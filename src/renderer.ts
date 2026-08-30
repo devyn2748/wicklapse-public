@@ -503,13 +503,13 @@ export function drawExecutionIndicators(
   unit: number,
   theme: Theme,
 ): void {
-  const executions: ExecutionPosition[] = [...spec.episode.fills]
+  const positioned: ExecutionPosition[] = [...spec.episode.fills]
     .sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)
     .map((fill, index) => ({
       fill, index, x: xForTime(fill.timestamp), y: yForPrice(Number(fill.estimatedPriceSol || 0)),
       ageMs: (activeTimestamp - fill.timestamp) * 1_000,
-    }))
-    .filter((entry) => entry.ageMs >= 0);
+    }));
+  const executions = positioned.filter((entry) => entry.ageMs >= 0);
   const isOnPlot = (entry: ExecutionPosition) => entry.x >= plot.x && entry.x <= plot.x + plot.width
     && entry.y >= plot.y && entry.y <= plot.y + plot.height;
   const dotRadius = (fill: TradeFill) => {
@@ -548,7 +548,7 @@ export function drawExecutionIndicators(
   }
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
-    const timed = executions.map((entry) => {
+    const timed = positioned.map((entry) => {
       const eventAt = replayEventVisualProgress(
         entry.fill,
         spec,
@@ -560,10 +560,14 @@ export function drawExecutionIndicators(
       );
       return { ...entry, eventAt };
     }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
-    const visible = timed.map((entry) => ({
+    const active = timed.map((entry) => ({
       ...entry,
       ageSeconds: (videoProgress - entry.eventAt) * config.duration,
-    })).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds).slice(-8);
+    })).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds);
+    const visible = active.slice(-3);
+    const upcoming = timed.find((entry) => entry.eventAt > videoProgress);
+    const preFadeSeconds = 0.22;
+    const secondsUntilNext = upcoming ? (upcoming.eventAt - videoProgress) * config.duration : Number.POSITIVE_INFINITY;
     const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
     context.save();
     context.textBaseline = "middle";
@@ -573,7 +577,11 @@ export function drawExecutionIndicators(
       const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
       const local = clamp(entry.ageSeconds / lifetimeSeconds);
       const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
-      const opacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
+      const naturalOpacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
+      const replacementFade = index === 0 && active.length >= 3 && secondsUntilNext <= preFadeSeconds
+        ? clamp(secondsUntilNext / preFadeSeconds)
+        : 1;
+      const opacity = naturalOpacity * replacementFade;
       const rise = (18 + easeInOut(local) * 125) * unit;
       const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
       const fontSize = 54 * unit;
