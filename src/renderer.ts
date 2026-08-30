@@ -650,7 +650,7 @@ export function drawExecutionIndicators(
         const marketCap = Number(entry.fill.estimatedPriceSol) * Number(spec.marketCapMultiplier ?? 0);
         bottomLine = Number.isFinite(marketCap) && marketCap > 0
           ? `(${formatMarketCap(marketCap, "auto").replace(/^\$/, "")} MC)`
-          : `(${spec.symbol} ENTRY)`;
+          : "(ENTRY)";
       } else {
         const sold = new Decimal(entry.fill.tokenAmountRaw || 0).abs();
         const remaining = new Decimal(entry.fill.walletPostTokenRaw || 0).abs();

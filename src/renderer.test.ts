@@ -165,4 +165,20 @@ describe("trade indicator visibility", () => {
     }
   });
 
+  it("never inserts the coin name into Hype indicators", () => {
+    const hypeSpec = {
+      ...spec,
+      symbol: "TESTCOIN",
+      marketCapMultiplier: null,
+      episode: { ...spec.episode, fills: [fill("hype-buy", "buy", 120, "1", "3")] },
+    } as ReplaySpec;
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, hypeSpec, "hype", 0.45, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
+    expect(labels).toContain("(ENTRY)");
+    expect(labels.some((label) => label.includes("TESTCOIN"))).toBe(false);
+  });
+
 });
