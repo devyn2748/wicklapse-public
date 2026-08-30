@@ -565,7 +565,7 @@ export function drawExecutionIndicators(
 
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
-    const visible = executions.map((entry) => {
+    const timed = executions.map((entry) => {
       const eventAt = replayEventVisualProgress(
         entry.fill,
         spec,
@@ -575,8 +575,31 @@ export function drawExecutionIndicators(
         config.chartLeadSeconds,
         config.chartTrailSeconds,
       );
-      return { ...entry, ageSeconds: (videoProgress - eventAt) * config.duration };
-    }).filter((entry) => entry.ageSeconds >= 0 && entry.ageSeconds <= lifetimeSeconds);
+      const value = new Decimal(entry.fill.quoteLamports)
+        .div(entry.fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
+      return { ...entry, eventAt, value };
+    }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
+    type FeedBurst = typeof timed[number] & { count: number; total: Decimal };
+    const bursts: FeedBurst[] = [];
+    for (const entry of timed) {
+      const previous = bursts.at(-1);
+      if (previous && previous.fill.side === entry.fill.side
+        && (entry.eventAt - previous.eventAt) * config.duration <= 0.18) {
+        const nextCount = previous.count + 1;
+        previous.x = (previous.x * previous.count + entry.x) / nextCount;
+        previous.y = (previous.y * previous.count + entry.y) / nextCount;
+        previous.eventAt = entry.eventAt;
+        previous.count = nextCount;
+        previous.total = previous.total.plus(entry.value);
+      } else {
+        bursts.push({ ...entry, count: 1, total: entry.value });
+      }
+    }
+    const visible = bursts.map((burst) => ({
+      ...burst,
+      ageSeconds: (videoProgress - burst.eventAt) * config.duration,
+    })).filter((burst) => burst.ageSeconds >= 0 && burst.ageSeconds <= lifetimeSeconds).slice(-8);
+    const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
     context.save();
     context.textBaseline = "middle";
     context.textAlign = "left";
@@ -586,14 +609,37 @@ export function drawExecutionIndicators(
       const local = clamp(entry.ageSeconds / lifetimeSeconds);
       const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
       const opacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
-      const rise = (18 + easeInOut(local) * 125 + index * 14) * unit;
-      const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
+      const rise = (18 + easeInOut(local) * 125) * unit;
+      const amount = formatMoney(entry.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, "");
+      const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"}${entry.count > 1 ? ` ×${entry.count}` : ""} ${amount}`;
       const fontSize = 54 * unit;
+      const lineHeight = 68 * unit;
       context.font = `1000 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
       const width = context.measureText(label).width;
-      const horizontalNudge = ((entry.index % 3) - 1) * 34 * unit;
-      const x = clamp(entry.x - width / 2 + horizontalNudge, plot.x + 12 * unit, plot.x + plot.width - width - 12 * unit);
-      const y = clamp(entry.y - rise, plot.y + fontSize, plot.y + plot.height - fontSize * 0.5);
+      const baseX = clamp(entry.x - width / 2, plot.x + 12 * unit, plot.x + plot.width - width - 12 * unit);
+      const baseY = clamp(entry.y - rise, plot.y + fontSize, plot.y + plot.height - fontSize * 0.5);
+      const candidates = [
+        [0, 0], [0, -lineHeight], [0, lineHeight],
+        [-width * 0.65, 0], [width * 0.65, 0],
+        [-width * 0.65, -lineHeight], [width * 0.65, -lineHeight],
+        [-width * 0.65, lineHeight], [width * 0.65, lineHeight],
+        [0, -lineHeight * 2], [0, lineHeight * 2],
+      ].map(([offsetX, offsetY]) => ({
+        x: clamp(baseX + offsetX!, plot.x + 12 * unit, plot.x + plot.width - width - 12 * unit),
+        y: clamp(baseY + offsetY!, plot.y + fontSize, plot.y + plot.height - fontSize * 0.5),
+      }));
+      const clear = (candidate: { x: number; y: number }) => !placed.some((other) => (
+        candidate.x < other.x + other.width + 18 * unit
+        && candidate.x + width + 18 * unit > other.x
+        && candidate.y - fontSize * 0.65 < other.y + other.height
+        && candidate.y + fontSize * 0.65 > other.y
+      ));
+      const selected = candidates.find(clear) ?? {
+        x: index % 2 === 0 ? plot.x + 12 * unit : plot.x + plot.width - width - 12 * unit,
+        y: clamp(plot.y + fontSize + Math.floor(index / 2) * lineHeight, plot.y + fontSize, plot.y + plot.height - fontSize * 0.5),
+      };
+      const { x, y } = selected;
+      placed.push({ x, y: y - fontSize * 0.65, width, height: fontSize * 1.3 });
       context.globalAlpha = opacity;
       context.lineJoin = "round";
       context.lineWidth = 10 * unit;

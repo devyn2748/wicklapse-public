@@ -96,6 +96,20 @@ describe("trade indicator visibility", () => {
     expect(calls.some((call) => call.method === "strokeText")).toBe(true);
   });
 
+  it("combines rapid same-side executions so sell text cannot overlap", () => {
+    const burstFills = [
+      fill("sell-burst-1", "sell", 120, "1", "3"),
+      fill("sell-burst-2", "sell", 120.5, "1", "3.1"),
+    ];
+    const burstSpec = { ...spec, episode: { ...spec.episode, fills: burstFills } } as ReplaySpec;
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, burstSpec, "feed", 0.5, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
+    expect(labels).toEqual([expect.stringContaining("SELL ×2")]);
+  });
+
   it("keeps marker labels visible after executions", () => {
     const { context, calls } = recordedContext();
     drawExecutionIndicators(context, spec, "markers", 1, {
