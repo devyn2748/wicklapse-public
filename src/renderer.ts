@@ -5,6 +5,7 @@ export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset"
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
+export type TradeIndicatorStyle = "detailed" | "feed" | "markers" | "minimal";
 
 export interface RenderConfig {
   duration: number;
@@ -26,6 +27,7 @@ export interface RenderConfig {
   chartTrailSeconds?: number | null;
   showAverageBuyLine?: boolean;
   showAverageSellLine?: boolean;
+  tradeIndicatorStyle?: TradeIndicatorStyle;
   showAthLine?: boolean;
   affiliateLink?: string;
   speedrunMode?: boolean;
@@ -180,6 +182,11 @@ function compactNumber(value: number): string {
   if (absolute >= 1) return value.toFixed(2);
   if (absolute === 0) return "0";
   return value.toPrecision(3);
+}
+
+function compactExecutionValue(fill: TradeFill, spec: ReplaySpec): string {
+  const value = new Decimal(fill.quoteLamports).div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
+  return formatMoney(value, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, "");
 }
 
 function formatMarketCap(value: number, format: "auto" | "thousands" | "millions", threshold = 1_000_000): string {
@@ -477,6 +484,151 @@ function drawChartReferenceLines(
     placedLabels.push(labelY);
     context.fillText(name, plotX - 8 * unit, labelY);
     context.restore();
+  }
+}
+
+type ExecutionPosition = { fill: TradeFill; x: number; y: number; ageMs: number; index: number };
+
+/** Canvas-only execution presentation. Every transient value is reconstructed from replay time. */
+function drawExecutionIndicators(
+  context: CanvasRenderingContext2D,
+  spec: ReplaySpec,
+  style: TradeIndicatorStyle,
+  activeTimestamp: number,
+  xForTime: (timestamp: number) => number,
+  yForPrice: (price: number) => number,
+  plot: { x: number; y: number; width: number; height: number },
+  unit: number,
+  theme: Theme,
+): void {
+  const executions: ExecutionPosition[] = [...spec.episode.fills]
+    .sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)
+    .map((fill, index) => ({
+      fill, index, x: xForTime(fill.timestamp), y: yForPrice(Number(fill.estimatedPriceSol || 0)),
+      ageMs: (activeTimestamp - fill.timestamp) * 1_000,
+    }))
+    .filter((entry) => entry.ageMs >= 0);
+  const dotRadius = (fill: TradeFill) => {
+    const usd = new Decimal(fill.quoteLamports).div(1_000_000_000).mul(spec.usdPerSol || 0).toNumber();
+    return (usd < 1_000 ? 4 : usd < 10_000 ? 5 : usd < 50_000 ? 6 : 7) * unit;
+  };
+
+  for (const entry of executions) {
+    const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
+    const radius = dotRadius(entry.fill);
+    const pulse = clamp(entry.ageMs / 620);
+    if (pulse < 1) {
+      context.beginPath();
+      context.arc(entry.x, entry.y, radius + (style === "minimal" ? 20 : 16) * unit * pulse, 0, Math.PI * 2);
+      context.fillStyle = `${color}${Math.round((1 - pulse) * 70).toString(16).padStart(2, "0")}`;
+      context.fill();
+    }
+    context.beginPath();
+    context.arc(entry.x, entry.y, Math.max(2 * unit, radius * 0.55), 0, Math.PI * 2);
+    context.fillStyle = `${color}${entry.ageMs < 700 ? "ff" : "9c"}`;
+    context.fill();
+  }
+  if (style === "minimal") return;
+
+  if (style === "feed") {
+    type FeedGroup = { side: "buy" | "sell"; last: number; total: Decimal; count: number };
+    const groups: FeedGroup[] = [];
+    for (const entry of executions) {
+      const previous = groups.at(-1);
+      const value = new Decimal(entry.fill.quoteLamports).div(entry.fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
+      if (previous && previous.side === entry.fill.side && entry.fill.timestamp - previous.last <= 0.4) {
+        previous.last = entry.fill.timestamp;
+        previous.total = previous.total.plus(value);
+        previous.count += 1;
+      } else {
+        groups.push({ side: entry.fill.side, last: entry.fill.timestamp, total: value, count: 1 });
+      }
+    }
+    const visible = groups.filter((group) => (activeTimestamp - group.last) * 1_000 <= 3_500).slice(-4);
+    context.save();
+    context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    context.textBaseline = "middle";
+    for (let i = 0; i < visible.length; i += 1) {
+      const group = visible[visible.length - 1 - i]!;
+      const age = (activeTimestamp - group.last) * 1_000;
+      const enter = easeInOut(clamp(age / 200));
+      const fade = age <= 1_600 ? 1 : 1 - clamp((age - 1_600) / 1_900);
+      const y = plot.y + plot.height - 28 * unit - i * 34 * unit + (1 - enter) * 8 * unit;
+      const color = group.side === "buy" ? theme.positive : theme.negative;
+      context.globalAlpha = fade;
+      context.fillStyle = `${theme.panelStrong}dd`;
+      roundedRect(context, plot.x + 14 * unit, y - 13 * unit, 205 * unit, 27 * unit, 6 * unit);
+      context.fill();
+      context.fillStyle = color;
+      context.fillText(`${group.side.toUpperCase()}${group.count > 1 ? ` ×${group.count}` : ""}`, plot.x + 25 * unit, y);
+      context.textAlign = "right";
+      context.fillText(formatMoney(group.total, spec.accountingCurrency ?? "SOL", false).replace(/^\+/, ""), plot.x + 207 * unit, y);
+      context.textAlign = "left";
+    }
+    context.restore();
+    return;
+  }
+
+  if (style === "markers") {
+    for (const entry of executions) {
+      const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
+      const above = entry.fill.side === "sell";
+      const arrival = easeInOut(clamp(entry.ageMs / 180));
+      const offset = (1 - arrival) * 7 * unit + (entry.index % 3) * 3 * unit;
+      const y = entry.y + (above ? -offset : offset);
+      const triangle = 7 * unit;
+      context.save();
+      context.translate(entry.x, y);
+      context.beginPath();
+      if (above) {
+        context.moveTo(0, triangle); context.lineTo(-triangle, -triangle); context.lineTo(triangle, -triangle);
+      } else {
+        context.moveTo(0, -triangle); context.lineTo(-triangle, triangle); context.lineTo(triangle, triangle);
+      }
+      context.closePath();
+      context.fillStyle = color;
+      context.shadowColor = color;
+      context.shadowBlur = entry.ageMs < 400 ? (1 - entry.ageMs / 400) * 14 * unit : 0;
+      context.fill();
+      context.restore();
+      if (entry.ageMs <= 1_000) {
+        context.globalAlpha = 1 - clamp((entry.ageMs - 750) / 250);
+        context.fillStyle = color;
+        context.font = `bold ${19 * unit}px ui-monospace, SFMono-Regular, monospace`;
+        context.fillText(`${above ? "▼" : "▲"} ${compactExecutionValue(entry.fill, spec)}`, entry.x + 11 * unit, y + (above ? -10 : 22) * unit);
+        context.globalAlpha = 1;
+      }
+    }
+    return;
+  }
+
+  const labels: Array<{ x: number; y: number; width: number; height: number }> = [];
+  for (const entry of executions) {
+    const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
+    const label = `${entry.fill.side.toUpperCase()} ${compactExecutionValue(entry.fill, spec)}`;
+    context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
+    const labelWidth = context.measureText(label).width + 32 * unit;
+    const labelHeight = 40 * unit;
+    const x = clamp(entry.x - labelWidth / 2, plot.x + 8 * unit, plot.x + plot.width - labelWidth - 8 * unit);
+    const baseY = entry.y + (entry.fill.side === "buy" ? -62 : 24) * unit;
+    const y = [0, -48, 48, -96, 96]
+      .map((offset) => clamp(baseY + offset * unit, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit))
+      .find((candidate) => !labels.some((placed) => x < placed.x + placed.width + 7 * unit
+        && x + labelWidth + 7 * unit > placed.x
+        && candidate < placed.y + placed.height + 6 * unit
+        && candidate + labelHeight + 6 * unit > placed.y)) ?? baseY;
+    labels.push({ x, y, width: labelWidth, height: labelHeight });
+    if (Math.abs(y - baseY) > 10 * unit) {
+      context.strokeStyle = `${color}aa`;
+      context.lineWidth = unit;
+      context.beginPath(); context.moveTo(entry.x, entry.y); context.lineTo(x + labelWidth / 2, y + labelHeight / 2); context.stroke();
+    }
+    context.setLineDash([7 * unit, 7 * unit]);
+    context.strokeStyle = `${color}55`;
+    context.lineWidth = 1.5 * unit;
+    context.beginPath(); context.moveTo(entry.x, plot.y); context.lineTo(entry.x, plot.y + plot.height); context.stroke();
+    context.setLineDash([]);
+    drawPill(context, label, x, y, { fill: theme.panelStrong, stroke: `${color}dd`, color, fontSize: 22 * unit, paddingX: 16 * unit });
   }
 }
 
@@ -936,70 +1088,9 @@ function drawLandscapeReplayFrame(
 
   drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
-  const markerWindow = Math.max(2, interval);
-  const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
-  for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
-    const quote = new Decimal(fill.quoteLamports).div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
-    const price = new Decimal(fill.estimatedPriceSol || 0);
-    const previous = markers.at(-1);
-    if (previous && previous.side === fill.side && fill.timestamp - previous.timestamp <= markerWindow) {
-      previous.weightedPrice = previous.weightedPrice.mul(previous.quote).plus(price.mul(quote)).div(previous.quote.plus(quote));
-      previous.quote = previous.quote.plus(quote);
-    } else markers.push({ timestamp: fill.timestamp, side: fill.side, quote, weightedPrice: price });
-  }
-  const markerLabels: Array<{ x: number; y: number; width: number; height: number }> = [];
-  // Pass 1: Draw all lines and dots first so they stay in the background
-  markers.forEach((marker) => {
-    if (marker.timestamp > activeTimestamp) return;
-    const x = xForTime(marker.timestamp);
-    const y = yForPrice(marker.weightedPrice.toNumber());
-    const color = marker.side === "buy" ? theme.positive : theme.negative;
-    context.setLineDash([8 * unit, 8 * unit]);
-    context.strokeStyle = `${color}55`;
-    context.lineWidth = 2 * unit;
-    context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
-    context.setLineDash([]);
-    context.beginPath();
-    context.arc(x, y, 15 * unit, 0, Math.PI * 2);
-    context.fillStyle = color;
-    context.shadowColor = color;
-    context.shadowBlur = 28 * unit;
-    context.fill();
-    context.shadowBlur = 0;
-    context.beginPath();
-    context.arc(x, y, 6 * unit, 0, Math.PI * 2);
-    context.fillStyle = theme.background;
-    context.fill();
-  });
-  
-  // Pass 2: Draw all labels on top
-  markers.forEach((marker, index) => {
-    if (marker.timestamp > activeTimestamp) return;
-    const x = xForTime(marker.timestamp);
-    const y = yForPrice(marker.weightedPrice.toNumber());
-    const color = marker.side === "buy" ? theme.positive : theme.negative;
-    const label = `${marker.side.toUpperCase()} ${formatMoney(marker.quote, spec.accountingCurrency ?? "SOL", true).replace(/^\+/, "")}`;
-    context.font = `bold ${25 * unit}px ui-monospace, SFMono-Regular, monospace`;
-    const labelWidth = context.measureText(label).width + 40 * unit;
-    const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);
-    const above = marker.side === "buy" ? index % 2 === 0 : index % 2 !== 0;
-    const baseLabelY = y + (above ? -72 : 35) * unit;
-    const labelHeight = 48 * unit;
-    const candidateOffsets = [0, -58, 58, -116, 116].map((offset) => offset * unit);
-    const labelY = candidateOffsets
-      .map((offset) => clamp(baseLabelY + offset, chartY, chartY + chartHeight - 48 * unit))
-      .find((candidateY) => !markerLabels.some((placed) => (
-        labelX < placed.x + placed.width + 8 * unit
-        && labelX + labelWidth + 8 * unit > placed.x
-        && candidateY < placed.y + placed.height + 6 * unit
-        && candidateY + labelHeight + 6 * unit > placed.y
-      ))) ?? clamp(baseLabelY, chartY, chartY + chartHeight - 48 * unit);
-    markerLabels.push({ x: labelX, y: labelY, width: labelWidth, height: labelHeight });
-    drawPill(context, label, labelX, labelY, {
-      fill: theme.panelStrong, stroke: `${color}dd`, color,
-      fontSize: 25 * unit, paddingX: 20 * unit,
-    });
-  });
+  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", activeTimestamp, xForTime, yForPrice, {
+    x: plotX, y: plotY, width: plotWidth, height: plotHeight,
+  }, unit, theme);
 
   if (chartReveal > 0) {
     context.setLineDash([10 * unit, 9 * unit]);
@@ -1353,70 +1444,9 @@ function drawPortraitReplayFrame(
 
   drawChartReferenceLines(context, referenceLines, yForPrice, plotX, plotY, plotWidth, plotHeight, unit, theme, config);
 
-  const markerWindow = Math.max(2, interval);
-  const markers: Array<{ timestamp: number; side: "buy" | "sell"; quote: Decimal; weightedPrice: Decimal }> = [];
-  for (const fill of [...spec.episode.fills].sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)) {
-    const quote = new Decimal(fill.quoteLamports).div(fill.quoteScale ?? spec.episode.quoteScale ?? 1_000_000_000);
-    const price = new Decimal(fill.estimatedPriceSol || 0);
-    const previous = markers.at(-1);
-    if (previous && previous.side === fill.side && fill.timestamp - previous.timestamp <= markerWindow) {
-      previous.weightedPrice = previous.weightedPrice.mul(previous.quote).plus(price.mul(quote)).div(previous.quote.plus(quote));
-      previous.quote = previous.quote.plus(quote);
-    } else markers.push({ timestamp: fill.timestamp, side: fill.side, quote, weightedPrice: price });
-  }
-  const markerLabels: Array<{ x: number; y: number; width: number; height: number }> = [];
-  // Pass 1: Draw all lines and dots first so they stay in the background
-  markers.forEach((marker) => {
-    if (marker.timestamp > activeTimestamp) return;
-    const x = xForTime(marker.timestamp);
-    const y = yForPrice(marker.weightedPrice.toNumber());
-    const color = marker.side === "buy" ? theme.positive : theme.negative;
-    context.setLineDash([8 * unit, 8 * unit]);
-    context.strokeStyle = `${color}55`;
-    context.lineWidth = 2 * unit;
-    context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
-    context.setLineDash([]);
-    context.beginPath();
-    context.arc(x, y, 15 * unit, 0, Math.PI * 2);
-    context.fillStyle = color;
-    context.shadowColor = color;
-    context.shadowBlur = 28 * unit;
-    context.fill();
-    context.shadowBlur = 0;
-    context.beginPath();
-    context.arc(x, y, 6 * unit, 0, Math.PI * 2);
-    context.fillStyle = theme.background;
-    context.fill();
-  });
-  
-  // Pass 2: Draw all labels on top
-  markers.forEach((marker, index) => {
-    if (marker.timestamp > activeTimestamp) return;
-    const x = xForTime(marker.timestamp);
-    const y = yForPrice(marker.weightedPrice.toNumber());
-    const color = marker.side === "buy" ? theme.positive : theme.negative;
-    const label = `${marker.side.toUpperCase()} ${formatMoney(marker.quote, spec.accountingCurrency ?? "SOL", true).replace(/^\+/, "")}`;
-    context.font = `bold ${25 * unit}px ui-monospace, SFMono-Regular, monospace`;
-    const labelWidth = context.measureText(label).width + 40 * unit;
-    const labelX = clamp(x - labelWidth / 2, chartX + 18 * unit, chartX + chartWidth - labelWidth - 18 * unit);
-    const above = marker.side === "buy" ? index % 2 === 0 : index % 2 !== 0;
-    const baseLabelY = y + (above ? -72 : 35) * unit;
-    const labelHeight = 48 * unit;
-    const candidateOffsets = [0, -58, 58, -116, 116].map((offset) => offset * unit);
-    const labelY = candidateOffsets
-      .map((offset) => clamp(baseLabelY + offset, chartY, chartY + chartHeight - 48 * unit))
-      .find((candidateY) => !markerLabels.some((placed) => (
-        labelX < placed.x + placed.width + 8 * unit
-        && labelX + labelWidth + 8 * unit > placed.x
-        && candidateY < placed.y + placed.height + 6 * unit
-        && candidateY + labelHeight + 6 * unit > placed.y
-      ))) ?? clamp(baseLabelY, chartY, chartY + chartHeight - 48 * unit);
-    markerLabels.push({ x: labelX, y: labelY, width: labelWidth, height: labelHeight });
-    drawPill(context, label, labelX, labelY, {
-      fill: theme.panelStrong, stroke: `${color}dd`, color,
-      fontSize: 25 * unit, paddingX: 20 * unit,
-    });
-  });
+  drawExecutionIndicators(context, spec, config.tradeIndicatorStyle ?? "feed", activeTimestamp, xForTime, yForPrice, {
+    x: plotX, y: plotY, width: plotWidth, height: plotHeight,
+  }, unit, theme);
 
   if (chartReveal > 0) {
     context.setLineDash([10 * unit, 9 * unit]);

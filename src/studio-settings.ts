@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Currency } from "./domain";
 import type { CandleIntervalPreference } from "./axiom-candles";
 import { BUNDLED_SOUND_PRESETS, type SoundName } from "./export-video";
-import type { ChartAnimation, ThemeName, WalletVisibility } from "./renderer";
+import type { ChartAnimation, ThemeName, TradeIndicatorStyle, WalletVisibility } from "./renderer";
 
 export type CardAspectRatio = "16:9" | "9:16";
 export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
@@ -31,6 +31,7 @@ export interface StudioSettings {
   chartTrailSeconds: number | null;
   showAverageBuyLine: boolean;
   showAverageSellLine: boolean;
+  tradeIndicatorStyle: TradeIndicatorStyle;
   showAthLine: boolean;
   affiliateLink: string;
   speedrunMode: boolean;
@@ -64,6 +65,7 @@ export const StudioSettingsSchema = z.object({
   chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
   showAverageBuyLine: z.boolean(),
   showAverageSellLine: z.boolean(),
+  tradeIndicatorStyle: z.enum(["detailed", "feed", "markers", "minimal"]),
   showAthLine: z.boolean(),
   affiliateLink: z.string(),
   speedrunMode: z.boolean(),
@@ -92,6 +94,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   chartTrailSeconds: null,
   showAverageBuyLine: false,
   showAverageSellLine: false,
+  tradeIndicatorStyle: "feed",
   showAthLine: false,
   affiliateLink: "",
   speedrunMode: false,

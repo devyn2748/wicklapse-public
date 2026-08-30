@@ -7,7 +7,7 @@ import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
 import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
-import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName } from "./renderer";
+import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName, type TradeIndicatorStyle } from "./renderer";
 import {
   loadStudioSettings,
   saveProject,
@@ -83,6 +83,7 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
       chartTrailSeconds: settings.chartTrailSeconds,
       showAverageBuyLine: settings.showAverageBuyLine,
       showAverageSellLine: settings.showAverageSellLine,
+      tradeIndicatorStyle: settings.tradeIndicatorStyle,
       showAthLine: settings.showAthLine,
       marketCapFormat: settings.marketCapFormat,
       marketCapThreshold: settings.marketCapThreshold,
@@ -360,6 +361,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         chartTrailSeconds: settings.chartTrailSeconds,
         showAverageBuyLine: settings.showAverageBuyLine,
         showAverageSellLine: settings.showAverageSellLine,
+        tradeIndicatorStyle: settings.tradeIndicatorStyle,
         showAthLine: settings.showAthLine,
         marketCapFormat: settings.marketCapFormat,
         marketCapThreshold: settings.marketCapThreshold,
@@ -395,6 +397,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           <section className="wick-side-section"><div className="wick-section-title"><h3>Chart style</h3><span>Default: Candlestick</span></div><select className="wick-sound-select" value={settings.chartStyle} onChange={(event) => patch("chartStyle", event.target.value as any)}><option value="candlestick">Candlestick</option><option value="bar">Bar (OHLC)</option><option value="line">Line</option><option value="area">Area</option></select><p>Choose the visual style of the price action data.</p></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Fixed full timeline</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p><div className="wick-check-list" style={{ marginTop: '12px' }}><label className="wick-check"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patch("speedrunMode", event.target.checked)} /><span><b>Cinematic Speedrun</b><small>Accelerates time between trades, slows down during trades.</small></span></label></div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Currency</h3><span>{settings.currency}</span></div><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Trade indicators</h3><span>Feed default</span></div><select className="wick-sound-select" value={settings.tradeIndicatorStyle} onChange={(event) => patch("tradeIndicatorStyle", event.target.value as TradeIndicatorStyle)}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · ● ≡</option><option value="markers">Markers · ▲ ▼</option><option value="minimal">Minimal · ●</option></select><p>Choose how executions appear in the chart and replay export.</p></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s clip</span></div>
             <label>First buy at<input key={`instant-lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto · 0.12s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value).then((changed) => { if (!changed) input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }); else input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
             <label>Chart after final sell<input key={`instant-trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto · 0.65s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value).then((changed) => { if (!changed) input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }); else input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
@@ -455,6 +458,18 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     <option value="grid">Retro Grid</option>
     <option value="particles">Particles</option>
     {BUNDLED_BACKDROPS.map((backdrop) => <option key={backdrop.value} value={backdrop.value}>{backdrop.label}</option>)}
+  </select>
+</div>
+<div className="wick-control-section">
+  <div className="wick-section-title">
+    <h3>Trade Indicators</h3>
+    <span>{settings.tradeIndicatorStyle === "feed" ? "Feed" : settings.tradeIndicatorStyle[0]!.toUpperCase() + settings.tradeIndicatorStyle.slice(1)}</span>
+  </div>
+  <select className="wick-sound-select" value={settings.tradeIndicatorStyle} onChange={(event) => patch("tradeIndicatorStyle", event.target.value as TradeIndicatorStyle)}>
+    <option value="detailed">Detailed · BUY $2.9K</option>
+    <option value="feed">Feed · ● ≡</option>
+    <option value="markers">Markers · ▲ ▼</option>
+    <option value="minimal">Minimal · ●</option>
   </select>
 </div>
             <div className="wick-control-grid wick-audio-grid">
