@@ -118,6 +118,22 @@ describe("trade indicator visibility", () => {
     expect(calls.some((call) => call.method === "strokeText")).toBe(true);
   });
 
+  it("uses matching permanent circle markers with + for buys and - for sells", () => {
+    const markerSpec = {
+      ...spec,
+      episode: { ...spec.episode, fills: [fill("marker-buy", "buy", 120, "1", "3"), fill("marker-sell", "sell", 121, "1", "3")] },
+    } as ReplaySpec;
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, markerSpec, "feed", 0.8, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    const markerArcs = calls.filter((call) => call.method === "arc" && Number(call.args[2]) === 11.9);
+    expect(markerArcs).toHaveLength(2);
+    // Two horizontal glyph strokes (+ and -), but only the buy has a vertical arm.
+    const moveCalls = calls.filter((call) => call.method === "moveTo");
+    expect(moveCalls).toHaveLength(3);
+  });
+
   it("keeps rapid same-side executions separate without overlapping", () => {
     const burstFills = [
       fill("sell-burst-1", "sell", 120, "1", "3"),

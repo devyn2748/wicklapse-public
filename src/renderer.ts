@@ -613,8 +613,9 @@ export function drawExecutionIndicators(
       if (!isOnPlot(entry)) continue;
       const isBuy = entry.fill.side === "buy";
       const color = isBuy ? theme.positive : theme.negative;
-      // Buys are enlarged and carry a + glyph so entries read at a glance.
-      const radius = dotRadius(entry.fill) * (isBuy ? 1.7 : 1);
+      // Buy and sell executions share one high-visibility marker treatment;
+      // color and the centered +/- glyph are the only visual distinction.
+      const radius = dotRadius(entry.fill) * 1.7;
       const pulse = clamp(entry.ageMs / 620);
       if (pulse < 1) {
         context.beginPath();
@@ -625,7 +626,7 @@ export function drawExecutionIndicators(
       }
       context.save();
       context.shadowColor = color;
-      context.shadowBlur = isBuy ? 20 * unit : 14 * unit;
+      context.shadowBlur = 20 * unit;
       context.beginPath();
       context.arc(entry.x, entry.y, radius, 0, Math.PI * 2);
       context.fillStyle = color;
@@ -634,18 +635,18 @@ export function drawExecutionIndicators(
       context.lineWidth = Math.max(2 * unit, radius * 0.28);
       context.strokeStyle = theme.panelStrong;
       context.stroke();
+      const arm = radius * 0.5;
+      context.strokeStyle = theme.panelStrong;
+      context.lineCap = "round";
+      context.lineWidth = Math.max(2.5 * unit, radius * 0.3);
+      context.beginPath();
+      context.moveTo(entry.x - arm, entry.y);
+      context.lineTo(entry.x + arm, entry.y);
       if (isBuy) {
-        const arm = radius * 0.5;
-        context.strokeStyle = theme.panelStrong;
-        context.lineCap = "round";
-        context.lineWidth = Math.max(2.5 * unit, radius * 0.3);
-        context.beginPath();
-        context.moveTo(entry.x - arm, entry.y);
-        context.lineTo(entry.x + arm, entry.y);
         context.moveTo(entry.x, entry.y - arm);
         context.lineTo(entry.x, entry.y + arm);
-        context.stroke();
       }
+      context.stroke();
       context.restore();
     }
   }
