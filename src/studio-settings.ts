@@ -5,7 +5,7 @@ import { BUNDLED_SOUND_PRESETS, type SoundName } from "./export-video";
 import type { ChartAnimation, ThemeName, TradeIndicatorStyle, WalletVisibility } from "./renderer";
 
 export type CardAspectRatio = "16:9" | "9:16";
-export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene" | "starlit-lake" | "neon-tokyo";
+export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene" | "starlit-lake" | "neon-tokyo" | "anime-edit" | "anime-edit-2" | "anime-edit-3" | "anime-edit-4";
 export type ChartStyle = "candlestick" | "line" | "area" | "bar";
 
 export interface StudioSettings {
@@ -58,14 +58,14 @@ export const StudioSettingsSchema = z.object({
   marketCapThreshold: z.number().finite().min(1_000).max(1_000_000_000),
   candleInterval: z.enum(["auto", "1s", "5s", "15s", "30s", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "12h", "1d"]),
   aspectRatio: z.enum(["16:9", "9:16"]),
-  backgroundStyle: z.enum(["glow", "solid", "grid", "particles", "aurora", "cyberpunk-scene", "starlit-lake", "neon-tokyo"]),
+  backgroundStyle: z.enum(["glow", "solid", "grid", "particles", "aurora", "cyberpunk-scene", "starlit-lake", "neon-tokyo", "anime-edit", "anime-edit-2", "anime-edit-3", "anime-edit-4"]),
   chartAnimation: z.enum(["progressive", "follow", "fixed"]),
   chartStyle: z.enum(["candlestick", "line", "area", "bar"]),
   chartLeadSeconds: z.number().finite().min(0).max(60).nullable(),
   chartTrailSeconds: z.number().finite().min(0).max(60).nullable(),
   showAverageBuyLine: z.boolean(),
   showAverageSellLine: z.boolean(),
-  tradeIndicatorStyle: z.enum(["detailed", "feed", "hype"]),
+  tradeIndicatorStyle: z.enum(["detailed", "feed", "hype", "minimal"]),
   showAthLine: z.boolean(),
   affiliateLink: z.string(),
   speedrunMode: z.boolean(),

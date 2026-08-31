@@ -2,13 +2,17 @@ import Decimal from "decimal.js";
 import type { Currency, ReplayPoint, ReplaySpec, TradeFill } from "./domain";
 
 export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset" | "matrix" | "hacker";
-export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene" | "starlit-lake" | "neon-tokyo";
+export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene" | "starlit-lake" | "neon-tokyo" | "anime-edit" | "anime-edit-2" | "anime-edit-3" | "anime-edit-4";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
-export type TradeIndicatorStyle = "detailed" | "feed" | "hype";
+export type TradeIndicatorStyle = "detailed" | "feed" | "hype" | "minimal";
 
 export interface RenderConfig {
   duration: number;
+  /** Recording/playback length when it differs from the chart animation duration. */
+  outputDuration?: number;
+  /** Actual preview/export clock, used for post-chart presentation fades. */
+  playbackElapsedSeconds?: number;
   currency: Currency;
   theme: ThemeName;
   backgroundStyle: BackgroundStyle;
@@ -520,7 +524,7 @@ export function drawExecutionIndicators(
   spec: ReplaySpec,
   style: TradeIndicatorStyle,
   videoProgress: number,
-  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds" | "speedrunMode" | "chartStyle">,
+  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds" | "speedrunMode" | "chartStyle" | "playbackElapsedSeconds">,
   activeTimestamp: number,
   xForTime: (timestamp: number) => number,
   yForPrice: (price: number) => number,
@@ -604,6 +608,8 @@ export function drawExecutionIndicators(
     const scaled = Number.isFinite(value) ? Math.log10(Math.max(1, value)) : 0;
     return clamp(7 + scaled * 1.25, 7, 13) * unit;
   };
+  const elapsedSeconds = config.playbackElapsedSeconds ?? videoProgress * config.duration;
+  const postChartTextOpacity = 1 - easeInOut(clamp((elapsedSeconds - config.duration) / 0.35));
 
   if (style !== "detailed") {
     // Dots are permanent chart markers: every fill keeps its dot once
@@ -650,6 +656,8 @@ export function drawExecutionIndicators(
       context.restore();
     }
   }
+  if (style === "minimal") return;
+  if (postChartTextOpacity <= 0.001) return;
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
     const visible = visibleQueue;
@@ -664,7 +672,7 @@ export function drawExecutionIndicators(
       const entrance = easeInOut(clamp(entry.ageSeconds / 0.14));
       const naturalOpacity = entry.ageSeconds < 0.95 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.95) / 0.5));
       const replacementFade = replacementOpacity(index, visible.length);
-      const opacity = naturalOpacity * replacementFade;
+      const opacity = naturalOpacity * replacementFade * postChartTextOpacity;
       const rise = (18 + easeInOut(local) * 125) * unit;
       const label = `${entry.fill.side === "buy" ? "BUY" : "SELL"} ${compactExecutionValue(entry.fill, spec)}`;
       const fontSize = 54 * unit;
@@ -751,7 +759,7 @@ export function drawExecutionIndicators(
       context.save();
       context.translate(centerX, tickerY);
       context.scale(scale, scale);
-      context.globalAlpha = alpha * 0.88;
+      context.globalAlpha = alpha * 0.88 * postChartTextOpacity;
       // A deeper dark shadow keeps the flat theme-colored text legible over
       // dense candles and bright custom backdrops without adding neon glow.
       context.shadowColor = "rgba(0, 0, 0, 1)";
@@ -768,7 +776,7 @@ export function drawExecutionIndicators(
         const percentage = total.gt(0) ? sold.div(total).mul(100).toNumber() : 100;
         if (Number.isFinite(percentage)) {
           const percentLabel = `${Math.max(0, Math.min(100, percentage)).toFixed(percentage < 10 ? 1 : 0)}%`;
-          context.globalAlpha = alpha * 0.7;
+          context.globalAlpha = alpha * 0.7 * postChartTextOpacity;
           context.font = monoFont(Math.max(22 * unit, fontSize * 0.34));
           context.fillText(percentLabel, 0, fontSize * 0.82);
         }
@@ -795,7 +803,7 @@ export function drawExecutionIndicators(
     const color = isBuy ? theme.positive : theme.negative;
     const dir = isBuy ? 1 : -1; // buy annotates below the fill, sell above
     context.save();
-    context.globalAlpha = replacementOpacity(index, visibleQueue.length);
+    context.globalAlpha = replacementOpacity(index, visibleQueue.length) * postChartTextOpacity;
 
     // One-shot pulse ring on appearance
     const pulse = clamp(entry.ageMs / 620);
@@ -901,9 +909,9 @@ function drawBackground(
   const style = config.backgroundStyle || "glow";
 
   if (config.backgroundImage) {
-    const image = config.backgroundImage as ImageBitmap;
-    const sourceWidth = image.width;
-    const sourceHeight = image.height;
+    const image = config.backgroundImage;
+    const sourceWidth = image instanceof HTMLVideoElement ? image.videoWidth : (image as ImageBitmap).width;
+    const sourceHeight = image instanceof HTMLVideoElement ? image.videoHeight : (image as ImageBitmap).height;
     if (sourceWidth > 0 && sourceHeight > 0) {
       const scale = Math.max(width / sourceWidth, height / sourceHeight);
       const drawWidth = sourceWidth * scale;

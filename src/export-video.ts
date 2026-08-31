@@ -70,6 +70,21 @@ export interface ExportAudioOptions {
   musicStart?: number;
   musicVolume?: number;
   eventVolume?: number;
+  backgroundVolume?: number;
+}
+
+async function cloneVideoBackdrop(source: HTMLVideoElement): Promise<HTMLVideoElement> {
+  const video = document.createElement("video");
+  video.src = source.currentSrc || source.src;
+  video.preload = "auto";
+  video.loop = true;
+  video.playsInline = true;
+  await new Promise<void>((resolve, reject) => {
+    video.addEventListener("loadeddata", () => resolve(), { once: true });
+    video.addEventListener("error", () => reject(new Error("The video backdrop could not be prepared for export.")), { once: true });
+    video.load();
+  });
+  return video;
 }
 
 function scheduleTone(
@@ -180,8 +195,12 @@ export async function exportReplayVideo(
   audioOptions: ExportAudioOptions,
   onProgress?: (progress: number) => void,
 ): Promise<{ blob: Blob; extension: "mp4" | "webm" }> {
+  const outputDuration = config.outputDuration ?? config.duration;
   if (!Number.isFinite(config.duration) || config.duration <= 0 || config.duration > 60) {
     throw new Error("Video duration must be between 1 and 60 seconds.");
+  }
+  if (!Number.isFinite(outputDuration) || outputDuration <= 0 || outputDuration > 60) {
+    throw new Error("Output duration must be between 1 and 60 seconds.");
   }
   if (!Number.isInteger(config.width) || !Number.isInteger(config.height) || config.width < 320 || config.height < 320 || config.width > 3_840 || config.height > 3_840) {
     throw new Error("Video dimensions must be whole numbers between 320 and 3840 pixels.");
@@ -195,9 +214,19 @@ export async function exportReplayVideo(
 
   const audio = new AudioContext();
   let stream: MediaStream | null = null;
+  let backgroundVideo: HTMLVideoElement | null = null;
   try {
+    const renderConfig = config.backgroundImage instanceof HTMLVideoElement
+      ? { ...config, backgroundImage: backgroundVideo = await cloneVideoBackdrop(config.backgroundImage) }
+      : config;
     await audio.resume();
     const destination = audio.createMediaStreamDestination();
+    if (backgroundVideo) {
+      const backgroundSource = audio.createMediaElementSource(backgroundVideo);
+      const backgroundGain = audio.createGain();
+      backgroundGain.gain.value = Math.max(0, Math.min(1, audioOptions.backgroundVolume ?? 0.45));
+      backgroundSource.connect(backgroundGain).connect(destination);
+    }
 
     const canvasStream = canvas.captureStream(config.fps ?? 30);
     stream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
@@ -222,7 +251,7 @@ export async function exportReplayVideo(
       prepareReplaySound(audio, audioOptions.buySound, audioOptions.buyCustomBuffer),
       prepareReplaySound(audio, audioOptions.sellSound, audioOptions.sellCustomBuffer),
     ]);
-    drawReplayFrame(context, spec, config, 0);
+    drawReplayFrame(context, spec, renderConfig, 0);
     recorder.start(250);
     const leadIn = 0.03;
     const now = audio.currentTime + leadIn;
@@ -247,14 +276,19 @@ export async function exportReplayVideo(
       const offset = Math.min(audioOptions.musicStart ?? 0, Math.max(0, source.buffer.duration - 0.05));
       source.start(now, offset, Math.min(config.duration, source.buffer.duration - offset));
     }
+    if (backgroundVideo) {
+      backgroundVideo.currentTime = 0;
+      await backgroundVideo.play();
+    }
     const start = performance.now() + leadIn * 1_000;
     await new Promise<void>((resolve) => {
       const frame = (time: number) => {
         const elapsed = (time - start) / 1_000;
-        const progress = Math.max(0, Math.min(1, elapsed / config.duration));
-        drawReplayFrame(context, spec, config, progress);
-        onProgress?.(progress);
-        if (progress >= 1) {
+        const outputProgress = Math.max(0, Math.min(1, elapsed / outputDuration));
+        const chartProgress = Math.max(0, Math.min(1, elapsed / config.duration));
+        drawReplayFrame(context, spec, { ...renderConfig, playbackElapsedSeconds: elapsed }, chartProgress);
+        onProgress?.(outputProgress);
+        if (outputProgress >= 1) {
           recorder.stop();
           resolve();
         } else requestAnimationFrame(frame);
@@ -264,6 +298,11 @@ export async function exportReplayVideo(
     const blob = await finished;
     return { blob, extension };
   } finally {
+    if (backgroundVideo) {
+      backgroundVideo.pause();
+      backgroundVideo.removeAttribute("src");
+      backgroundVideo.load();
+    }
     stream?.getTracks().forEach((track) => track.stop());
     if (audio.state !== "closed") await audio.close();
   }

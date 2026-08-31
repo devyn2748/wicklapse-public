@@ -13,11 +13,15 @@ describe("StudioSettingsSchema", () => {
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, candleInterval: "2s" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "bubbles" }).success).toBe(false);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "markers" }).success).toBe(false);
-    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "minimal" }).success).toBe(false);
+    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "minimal" }).success).toBe(true);
     expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, tradeIndicatorStyle: "hype" }).success).toBe(true);
   });
 
   it("defaults execution indicators to the canvas feed", () => {
     expect(DEFAULT_STUDIO_SETTINGS.tradeIndicatorStyle).toBe("feed");
+  });
+
+  it.each(["anime-edit", "anime-edit-2", "anime-edit-3", "anime-edit-4"])("accepts bundled animated backdrop %s", (backgroundStyle) => {
+    expect(StudioSettingsSchema.safeParse({ ...DEFAULT_STUDIO_SETTINGS, backgroundStyle }).success).toBe(true);
   });
 });

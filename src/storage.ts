@@ -95,7 +95,7 @@ export async function loadStudioSettings(): Promise<StudioSettings> {
     return DEFAULT_STUDIO_SETTINGS;
   }
   const storedSettings = { ...((value as { settings?: Partial<StudioSettings> }).settings ?? {}) } as Record<string, unknown>;
-  if (storedSettings.tradeIndicatorStyle === "markers" || storedSettings.tradeIndicatorStyle === "minimal") {
+  if (storedSettings.tradeIndicatorStyle === "markers") {
     storedSettings.tradeIndicatorStyle = "feed";
   }
   const parsed = StudioSettingsSchema.safeParse({

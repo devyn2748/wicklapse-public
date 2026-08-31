@@ -134,6 +134,25 @@ describe("trade indicator visibility", () => {
     expect(moveCalls).toHaveLength(3);
   });
 
+  it("renders minimalist indicators as symbols without text overlays", () => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, "minimal", 0.8, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 160, xForTime, yForPrice, plot, 1, theme);
+    expect(calls.some((call) => call.method === "arc")).toBe(true);
+    expect(calls.some((call) => call.method === "fillText" || call.method === "strokeText")).toBe(false);
+  });
+
+  it("removes indicator text after the selected chart duration", () => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, "feed", 1, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+      playbackElapsedSeconds: 8.4,
+    }, 160, xForTime, yForPrice, plot, 1, theme);
+    expect(calls.some((call) => call.method === "arc")).toBe(true);
+    expect(calls.some((call) => call.method === "fillText" || call.method === "strokeText")).toBe(false);
+  });
+
   it("keeps rapid same-side executions separate without overlapping", () => {
     const burstFills = [
       fill("sell-burst-1", "sell", 120, "1", "3"),

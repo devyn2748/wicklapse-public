@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { browser } from "wxt/browser";
 import { normalizeWalletAddresses } from "./axiom-api";
-import { BUNDLED_BACKDROPS, loadBundledBackdrop } from "./backdrops";
+import { BUNDLED_BACKDROPS, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "./backdrops";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
@@ -37,7 +37,7 @@ interface RelatedTradeChoice {
   combinedExecutions: number;
 }
 
-function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: ImageBitmap | null }): JSX.Element {
+function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: BundledBackdropMedia | null }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<AudioContext | null>(null);
   const previousProgressRef = useRef(0);
@@ -47,6 +47,10 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
 
   const previewWidth = settings.aspectRatio === "9:16" ? 540 : 960;
   const previewHeight = settings.aspectRatio === "9:16" ? 960 : 540;
+  const playbackDuration = isVideoBackdrop(backgroundImage) && Number.isFinite(backgroundImage.duration)
+    ? backgroundImage.duration
+    : settings.duration;
+  const chartProgress = (playbackProgress: number) => Math.min(1, playbackProgress * playbackDuration / settings.duration);
 
   const ensureAudio = useCallback(async () => {
     const audio = audioRef.current ?? new AudioContext();
@@ -74,7 +78,7 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
     }
   }, [previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, settings.speedrunMode, spec]);
 
-  const draw = useCallback((next: number) => {
+  const draw = useCallback((next: number, playbackElapsedSeconds = next * settings.duration) => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
@@ -101,10 +105,25 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
       width: canvas.width,
       height: canvas.height,
       backgroundImage,
+      playbackElapsedSeconds,
     }, next);
   }, [backgroundImage, settings, spec]);
 
-  useEffect(() => draw(progress), [draw, progress]);
+  useEffect(() => draw(chartProgress(progress), progress * playbackDuration), [draw, progress, playbackDuration, settings.duration]);
+  useEffect(() => {
+    if (!isVideoBackdrop(backgroundImage)) return;
+    const video = backgroundImage;
+    video.volume = 0.45;
+    video.muted = false;
+    if (playing) void video.play().catch(() => undefined);
+    else video.pause();
+    return () => video.pause();
+  }, [backgroundImage, playing]);
+  useEffect(() => {
+    if (playing || !isVideoBackdrop(backgroundImage) || !Number.isFinite(backgroundImage.duration) || backgroundImage.duration <= 0) return;
+    const desired = (progress * playbackDuration) % backgroundImage.duration;
+    if (Math.abs(backgroundImage.currentTime - desired) > 0.04) backgroundImage.currentTime = desired;
+  }, [backgroundImage, playbackDuration, playing, progress]);
   useEffect(() => {
     let active = true;
     void ensureAudio().then((audio) => Promise.all([
@@ -120,19 +139,20 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
   }, []);
   useEffect(() => {
     if (!playing) return;
-    const started = performance.now() - progress * settings.duration * 1_000;
+    const started = performance.now() - progress * playbackDuration * 1_000;
     let frameId = 0;
     const frame = (now: number) => {
-      const next = Math.min(1, (now - started) / (settings.duration * 1_000));
-      soundCrossedEvents(previousProgressRef.current, next);
-      previousProgressRef.current = next;
+      const next = Math.min(1, (now - started) / (playbackDuration * 1_000));
+      const nextChartProgress = chartProgress(next);
+      soundCrossedEvents(previousProgressRef.current, nextChartProgress);
+      previousProgressRef.current = nextChartProgress;
       setProgress(next);
       if (next >= 1) setPlaying(false);
       else frameId = requestAnimationFrame(frame);
     };
     frameId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(frameId);
-  }, [playing, settings.duration, soundCrossedEvents]);
+  }, [playbackDuration, playing, settings.duration, soundCrossedEvents]);
 
   return (
     <div className="wick-preview">
@@ -148,18 +168,18 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
               previousProgressRef.current = 0;
               soundedEventsRef.current.clear();
               setProgress(0);
-            } else previousProgressRef.current = progress;
+            } else previousProgressRef.current = chartProgress(progress);
             setPlaying(true);
           });
         }}>{playing ? "Ⅱ" : "▶"}</button>
         <input type="range" min={0} max={1} step={0.001} value={progress} onChange={(event) => {
           setPlaying(false);
           const next = Number(event.target.value);
-          previousProgressRef.current = next;
+          previousProgressRef.current = chartProgress(next);
           soundedEventsRef.current.clear();
           setProgress(next);
         }} />
-        <span>{(progress * settings.duration).toFixed(1)} / {settings.duration}s</span>
+        <span>{(progress * playbackDuration).toFixed(1)} / {playbackDuration.toFixed(1)}s</span>
       </div>
     </div>
   );
@@ -192,8 +212,8 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   const [fallbackWalletInput, setFallbackWalletInput] = useState("");
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
-  const backgroundImageRef = useRef<ImageBitmap | null>(null);
+  const [backgroundImage, setBackgroundImage] = useState<BundledBackdropMedia | null>(null);
+  const backgroundImageRef = useRef<BundledBackdropMedia | null>(null);
 
   const requestRelatedTradeChoice = useCallback((choice: RelatedTradeChoice, signal: AbortSignal): Promise<boolean> => {
     if (signal.aborted) return Promise.reject(new DOMException("Replay request aborted", "AbortError"));
@@ -337,22 +357,22 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     let active = true;
     void loadBundledBackdrop(settings.backgroundStyle, settings.aspectRatio).then((image) => {
       if (!active) {
-        image?.close();
+        disposeBundledBackdrop(image);
         return;
       }
-      backgroundImageRef.current?.close();
+      disposeBundledBackdrop(backgroundImageRef.current);
       backgroundImageRef.current = image;
       setBackgroundImage(image);
     }).catch(() => {
       if (!active) return;
-      backgroundImageRef.current?.close();
+      disposeBundledBackdrop(backgroundImageRef.current);
       backgroundImageRef.current = null;
       setBackgroundImage(null);
     });
     return () => { active = false; };
   }, [settings.aspectRatio, settings.backgroundStyle]);
 
-  useEffect(() => () => backgroundImageRef.current?.close(), []);
+  useEffect(() => () => disposeBundledBackdrop(backgroundImageRef.current), []);
 
   const patch = <K extends keyof StudioSettings>(key: K, value: StudioSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -449,6 +469,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         height: settings.aspectRatio === "9:16" ? 1920 : 1080,
         fps: 30,
         backgroundImage,
+        outputDuration: isVideoBackdrop(backgroundImage) ? backgroundImage.duration : settings.duration,
       };
       const result = await exportReplayVideo(spec, config, {
         buySound: settings.buySound,
@@ -477,8 +498,8 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           <section className="wick-side-section"><div className="wick-section-title"><h3>Chart style</h3><span>Default: Candlestick</span></div><select className="wick-sound-select" value={settings.chartStyle} onChange={(event) => patch("chartStyle", event.target.value as any)}><option value="candlestick">Candlestick</option><option value="bar">Bar (OHLC)</option><option value="line">Line</option><option value="area">Area</option></select><p>Choose the visual style of the price action data.</p></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Fixed full timeline</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p><div className="wick-check-list" style={{ marginTop: '12px' }}><label className="wick-check"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patch("speedrunMode", event.target.checked)} /><span><b>Cinematic Speedrun</b><small>Accelerates time between trades, slows down during trades.</small></span></label></div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Currency</h3><span>{settings.currency}</span></div><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></section>
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Trade indicators</h3><span>Feed default</span></div><select className="wick-sound-select" value={settings.tradeIndicatorStyle} onChange={(event) => patch("tradeIndicatorStyle", event.target.value as TradeIndicatorStyle)}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · animated text</option><option value="hype">Hype · neon two-line</option></select><p>Choose how executions appear in the chart and replay export.</p></section>
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s clip</span></div>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Trade indicators</h3><span>Feed default</span></div><select className="wick-sound-select" value={settings.tradeIndicatorStyle} onChange={(event) => patch("tradeIndicatorStyle", event.target.value as TradeIndicatorStyle)}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · animated text</option><option value="hype">Hype · neon two-line</option><option value="minimal">Minimal · + / − only</option></select><p>Choose how executions appear in the chart and replay export.</p></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s chart</span></div>
             <label>First buy at<input key={`instant-lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto · 0.12s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value).then((changed) => { if (!changed) input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }); else input.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
             <label>Chart after final sell<input key={`instant-trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto · 0.65s" onBlur={(event) => { const input = event.currentTarget; const raw = input.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value).then((changed) => { if (!changed) input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }); else input.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
             <small>Values are positions within the exported video. Clear either field to return it to Auto.</small>
@@ -489,7 +510,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
             <label className="wick-check"><input type="checkbox" checked={settings.showAthLine} disabled={!spec.athMarketCapUsd} onChange={(event) => patch("showAthLine", event.target.checked)} /><span><b>Coin ATH</b><small>{spec.athMarketCapUsd ? "Line when reached in-clip; otherwise top badge" : "True ATH unavailable from this provider"}</small></span></label>
           </div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Affiliate / X Handle</h3><span>Optional</span></div><label>Link or @handle<input type="text" value={settings.affiliateLink} onChange={(event) => patch("affiliateLink", event.currentTarget.value)} onKeyDown={(event) => event.stopPropagation()} onKeyUp={(event) => event.stopPropagation()} placeholder="e.g. @username or t.me/link" maxLength={40} autoComplete="off" spellCheck={false} /></label></section>
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Custom clip length</h3><span>1–60 seconds</span></div><label>Video duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Custom chart length</h3><span>1–60 seconds</span></div><label>Chart duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label>{isBundledVideoBackdrop(settings.backgroundStyle) && <small>The chart completes in this time; the exported video continues to the end of the selected edit.</small>}</section>
         </div>
         <div className="wick-side-footer">Changes restart the preview automatically.</div>
       </aside>}
@@ -513,7 +534,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} /></section>
           <section className="wick-controls">
             {error && <div className="wick-error" role="alert">{error}</div>}
-            <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
+            <div className="wick-control-section"><div className="wick-section-title"><h3>{isBundledVideoBackdrop(settings.backgroundStyle) ? "Chart duration" : "Video duration"}</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value)} /></div>
             <div className="wick-control-section">
   <div className="wick-section-title">
@@ -552,11 +573,12 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     <option value="detailed">Detailed · BUY $2.9K</option>
     <option value="feed">Feed · animated text</option>
     <option value="hype">Hype · neon two-line</option>
+    <option value="minimal">Minimal · + / − only</option>
   </select>
 </div>
             <div className="wick-control-grid wick-audio-grid">
-              <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>
-              <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>
+              <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">No sound</option></select></div>
+              <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">No sound</option></select></div>
             </div>
             <div className="wick-export-zone">
               {exportProgress !== null && <div className="wick-export-progress"><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b><progress max={1} value={exportProgress} /></div>}

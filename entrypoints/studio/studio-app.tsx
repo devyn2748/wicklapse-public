@@ -19,7 +19,7 @@ import {
   type TradeFill,
 } from "../../src/domain";
 import { normalizeWalletAddresses } from "../../src/axiom-api";
-import { BUNDLED_BACKDROPS, loadBundledBackdrop } from "../../src/backdrops";
+import { BUNDLED_BACKDROPS, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "../../src/backdrops";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildProviderExecutionEpisodes } from "../../src/provider-capture";
 import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
@@ -167,7 +167,7 @@ function PreviewCanvas({
 }: {
   spec: ReplaySpec;
   settings: StudioSettings;
-  backgroundImage: ImageBitmap | null;
+  backgroundImage: BundledBackdropMedia | null;
   buyCustomBuffer: AudioBuffer | null;
   sellCustomBuffer: AudioBuffer | null;
 }): JSX.Element {
@@ -178,6 +178,10 @@ function PreviewCanvas({
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const startRef = useRef(0);
+  const playbackDuration = isVideoBackdrop(backgroundImage) && Number.isFinite(backgroundImage.duration)
+    ? backgroundImage.duration
+    : settings.duration;
+  const chartProgress = (playbackProgress: number) => Math.min(1, playbackProgress * playbackDuration / settings.duration);
 
   const ensureAudio = useCallback(async () => {
     const audio = audioRef.current ?? new AudioContext();
@@ -209,7 +213,7 @@ function PreviewCanvas({
   }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.height, settings.sellSound, settings.speedrunMode, settings.width, spec]);
 
   const draw = useCallback(
-    (nextProgress: number) => {
+    (nextProgress: number, playbackElapsedSeconds = nextProgress * settings.duration) => {
       const canvas = canvasRef.current;
       const context = canvas?.getContext("2d");
       if (!canvas || !context) return;
@@ -237,6 +241,7 @@ function PreviewCanvas({
           width: canvas.width,
           height: canvas.height,
           backgroundImage,
+          playbackElapsedSeconds,
         },
         nextProgress,
       );
@@ -244,7 +249,20 @@ function PreviewCanvas({
     [backgroundImage, settings, spec],
   );
 
-  useEffect(() => draw(progress), [draw, progress]);
+  useEffect(() => draw(chartProgress(progress), progress * playbackDuration), [draw, progress, playbackDuration, settings.duration]);
+  useEffect(() => {
+    if (!isVideoBackdrop(backgroundImage)) return;
+    backgroundImage.volume = 0.45;
+    backgroundImage.muted = false;
+    if (playing) void backgroundImage.play().catch(() => undefined);
+    else backgroundImage.pause();
+    return () => backgroundImage.pause();
+  }, [backgroundImage, playing]);
+  useEffect(() => {
+    if (playing || !isVideoBackdrop(backgroundImage) || !Number.isFinite(backgroundImage.duration) || backgroundImage.duration <= 0) return;
+    const desired = (progress * playbackDuration) % backgroundImage.duration;
+    if (Math.abs(backgroundImage.currentTime - desired) > 0.04) backgroundImage.currentTime = desired;
+  }, [backgroundImage, playbackDuration, playing, progress]);
   useEffect(() => {
     let active = true;
     void ensureAudio().then((audio) => Promise.all([
@@ -262,18 +280,19 @@ function PreviewCanvas({
   useEffect(() => {
     if (!playing) return;
     let frameId = 0;
-    startRef.current = performance.now() - progress * settings.duration * 1_000;
+    startRef.current = performance.now() - progress * playbackDuration * 1_000;
     const frame = (now: number) => {
-      const next = Math.min(1, (now - startRef.current) / (settings.duration * 1_000));
-      soundCrossedEvents(previousProgressRef.current, next);
-      previousProgressRef.current = next;
+      const next = Math.min(1, (now - startRef.current) / (playbackDuration * 1_000));
+      const nextChartProgress = chartProgress(next);
+      soundCrossedEvents(previousProgressRef.current, nextChartProgress);
+      previousProgressRef.current = nextChartProgress;
       setProgress(next);
       if (next >= 1) setPlaying(false);
       else frameId = requestAnimationFrame(frame);
     };
     frameId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(frameId);
-  }, [playing, settings.duration, soundCrossedEvents]);
+  }, [playbackDuration, playing, settings.duration, soundCrossedEvents]);
 
   return (
     <div className="preview-shell">
@@ -297,14 +316,14 @@ function PreviewCanvas({
                 previousProgressRef.current = 0;
                 soundedEventsRef.current.clear();
                 setProgress(0);
-              } else previousProgressRef.current = progress;
+              } else previousProgressRef.current = chartProgress(progress);
               setPlaying(true);
             }).catch(() => undefined);
           }}
         >
           {playing ? "Ⅱ" : "▶"}
         </button>
-        <span>{(progress * settings.duration).toFixed(1)}s</span>
+        <span>{(progress * playbackDuration).toFixed(1)}s</span>
         <input
           aria-label="Preview timeline"
           type="range"
@@ -315,12 +334,12 @@ function PreviewCanvas({
           onChange={(event) => {
             setPlaying(false);
             const next = Number(event.target.value);
-            previousProgressRef.current = next;
+            previousProgressRef.current = chartProgress(next);
             soundedEventsRef.current.clear();
             setProgress(next);
           }}
         />
-        <span>{settings.duration}s</span>
+        <span>{playbackDuration.toFixed(1)}s</span>
       </div>
     </div>
   );
@@ -401,8 +420,8 @@ export function StudioApp(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
-  const [bundledBackgroundImage, setBundledBackgroundImage] = useState<ImageBitmap | null>(null);
-  const bundledBackgroundRef = useRef<ImageBitmap | null>(null);
+  const [bundledBackgroundImage, setBundledBackgroundImage] = useState<BundledBackdropMedia | null>(null);
+  const bundledBackgroundRef = useRef<BundledBackdropMedia | null>(null);
   const [musicBuffer, setMusicBuffer] = useState<AudioBuffer | null>(null);
   const [musicStart, setMusicStart] = useState(0);
   const [buyCustomBuffer, setBuyCustomBuffer] = useState<AudioBuffer | null>(null);
@@ -448,21 +467,21 @@ export function StudioApp(): JSX.Element {
     const orientation = settings.height > settings.width ? "9:16" : "16:9";
     void loadBundledBackdrop(settings.backgroundStyle, orientation).then((image) => {
       if (!active) {
-        image?.close();
+        disposeBundledBackdrop(image);
         return;
       }
-      bundledBackgroundRef.current?.close();
+      disposeBundledBackdrop(bundledBackgroundRef.current);
       bundledBackgroundRef.current = image;
       setBundledBackgroundImage(image);
     }).catch(() => {
       if (!active) return;
-      bundledBackgroundRef.current?.close();
+      disposeBundledBackdrop(bundledBackgroundRef.current);
       bundledBackgroundRef.current = null;
       setBundledBackgroundImage(null);
     });
     return () => { active = false; };
   }, [settings.backgroundStyle, settings.height, settings.width]);
-  useEffect(() => () => bundledBackgroundRef.current?.close(), []);
+  useEffect(() => () => disposeBundledBackdrop(bundledBackgroundRef.current), []);
 
   const effectiveBackgroundImage = backgroundImage ?? bundledBackgroundImage;
 
@@ -700,6 +719,7 @@ export function StudioApp(): JSX.Element {
         height: settings.height,
         fps: settings.fps,
         backgroundImage: effectiveBackgroundImage,
+        outputDuration: isVideoBackdrop(effectiveBackgroundImage) ? effectiveBackgroundImage.duration : settings.duration,
       };
       const result = await exportReplayVideo(
         spec,
@@ -976,7 +996,7 @@ export function StudioApp(): JSX.Element {
                 <label>Width<input type="number" min={320} max={3840} step={2} value={settings.width} onChange={(event) => patchSettings("width", Number(event.target.value))} /></label>
                 <label>Height<input type="number" min={320} max={3840} step={2} value={settings.height} onChange={(event) => patchSettings("height", Number(event.target.value))} /></label>
                 <div className="field-group"><span>Duration presets</span><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
-                <label>Custom duration (seconds)<input key={`duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value); else event.currentTarget.value = String(settings.duration); }} /></label>
+                <label>{isBundledVideoBackdrop(settings.backgroundStyle) ? "Chart duration (seconds)" : "Custom duration (seconds)"}<input key={`duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value); else event.currentTarget.value = String(settings.duration); }} /></label>
                 <div className="field-group"><span>Frame rate</span><Segmented value={settings.fps} options={[{ value: 30, label: "30 FPS" }, { value: 60, label: "60 FPS" }]} onChange={(value) => patchSettings("fps", value)} /></div>
               </div>
             </section>
@@ -1006,7 +1026,7 @@ export function StudioApp(): JSX.Element {
               <div className="inspector-grid">
                 <div className="field-group"><span>Currency</span><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patchSettings("currency", value)} /></div>
                 <div className="field-group"><span>Value format</span><Segmented value={settings.exactValues ? "exact" : "rounded"} options={[{ value: "rounded", label: "Rounded" }, { value: "exact", label: "Exact" }]} onChange={(value) => patchSettings("exactValues", value === "exact")} /></div>
-                <label>Trade indicators<select value={settings.tradeIndicatorStyle} onChange={(event) => patchSettings("tradeIndicatorStyle", event.target.value as StudioSettings["tradeIndicatorStyle"])}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · animated text</option><option value="hype">Hype · neon two-line</option></select></label>
+                <label>Trade indicators<select value={settings.tradeIndicatorStyle} onChange={(event) => patchSettings("tradeIndicatorStyle", event.target.value as StudioSettings["tradeIndicatorStyle"])}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · animated text</option><option value="hype">Hype · neon two-line</option><option value="minimal">Minimal · + / − only</option></select></label>
                 <div className="field-group"><span>Average entry/exit lines</span><Segmented value={settings.showAverageBuyLine || settings.showAverageSellLine ? "on" : "off"} options={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={(value) => { patchSettings("showAverageBuyLine", value === "on"); patchSettings("showAverageSellLine", value === "on"); }} /></div>
               </div>
             </section>
@@ -1022,7 +1042,7 @@ export function StudioApp(): JSX.Element {
 
             <section className="inspector-card" id="advanced-audio">
               <h3>♫ Event audio</h3>
-              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{buyCustomBuffer && <option value="custom">Custom · {buyCustomName}</option>}<option value="off">Off</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{sellCustomBuffer && <option value="custom">Custom · {sellCustomName}</option>}<option value="off">Off</option></select></label></div>
+              <div className="inspector-grid"><label>Buy sound<select value={settings.buySound} onChange={(event) => patchSettings("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{buyCustomBuffer && <option value="custom">Custom · {buyCustomName}</option>}<option value="off">No sound</option></select></label><label>Sell sound<select value={settings.sellSound} onChange={(event) => patchSettings("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{sellCustomBuffer && <option value="custom">Custom · {sellCustomName}</option>}<option value="off">No sound</option></select></label></div>
               <div className="media-upload-grid"><label>{buyCustomName ? `Replace ${buyCustomName}` : "Upload buy sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("buy", event)} /></label><label>{sellCustomName ? `Replace ${sellCustomName}` : "Upload sell sound"}<input type="file" accept="audio/*" onChange={(event) => void loadEventSound("sell", event)} /></label></div>
               <small className="local-asset-note">Custom event sounds stay on this device and are used for the current studio session. The first five seconds of each file are available for playback.</small>
             </section>
@@ -1036,7 +1056,7 @@ export function StudioApp(): JSX.Element {
 
             <section className="inspector-card export-card" id="advanced-export">
               <h3>⇩ Export video</h3>
-              <dl><div><dt>Resolution</dt><dd>{settings.width} × {settings.height}</dd></div><div><dt>Duration</dt><dd>{settings.duration}s</dd></div><div><dt>Format</dt><dd>MP4 / WebM fallback</dd></div></dl>
+              <dl><div><dt>Resolution</dt><dd>{settings.width} × {settings.height}</dd></div><div><dt>{isBundledVideoBackdrop(settings.backgroundStyle) ? "Chart / output" : "Duration"}</dt><dd>{isVideoBackdrop(effectiveBackgroundImage) ? `${settings.duration}s / ${effectiveBackgroundImage.duration.toFixed(1)}s` : `${settings.duration}s`}</dd></div><div><dt>Format</dt><dd>MP4 / WebM fallback</dd></div></dl>
               {exportProgress !== null && <div className="export-progress"><div><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b></div><progress max={1} value={exportProgress} /></div>}
               <button className="primary-button" type="button" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "Export Wicklapse Video"}</button>
               <button className="text-button" type="button" onClick={() => setStage(context ? "confirm" : "connect")}>Choose another trade</button>
