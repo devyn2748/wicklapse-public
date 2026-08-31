@@ -6,7 +6,7 @@ import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
-import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
+import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, openPositionEndSeconds, type CandleIntervalPreference } from "./replay-project";
 import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName, type TradeIndicatorStyle } from "./renderer";
 import {
   loadStudioSettings,
@@ -238,7 +238,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
 
   const buildCapturedReplay = useCallback(async (
     candleInterval: CandleIntervalPreference = "auto",
-    timelineOptions?: { duration: number; leadSeconds: number | null; trailSeconds: number | null },
+    timelineOptions?: { duration: number; leadSeconds: number | null; trailSeconds: number | null; openPnlToDate?: boolean },
     manualWallets: string[] = [],
   ) => {
     const request = replayRequestRef.current.begin();
@@ -287,7 +287,10 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
       setStatus(providerName === "Fomo" && providerTradeCount > 1
         ? `Combining ${providerTradeCount} nearby Fomo trades (${episode.fills.length} executions)…`
         : `Building from ${episode.fills.length} ${providerName} execution${episode.fills.length === 1 ? "" : "s"}…`);
-      const nextSpec = await createReplaySpec(episode, replaySourceContext, replaySourceContext.walletAddress ?? "", candleInterval, request.signal, timelineOptions, setStatus);
+      const specTimeline = timelineOptions
+        ? { ...timelineOptions, openEndSeconds: openPositionEndSeconds(episode, replaySourceContext, timelineOptions.openPnlToDate ?? true) }
+        : undefined;
+      const nextSpec = await createReplaySpec(episode, replaySourceContext, replaySourceContext.walletAddress ?? "", candleInterval, request.signal, specTimeline, setStatus);
       if (!replayRequestRef.current.isLatest(request.id) || context.provider !== replaySourceContext.provider) return;
       setSpec(nextSpec);
       setError(geckoFallbackWarning(nextSpec));
@@ -337,6 +340,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           duration: savedSettings.duration,
           leadSeconds: savedSettings.chartLeadSeconds,
           trailSeconds: savedSettings.chartTrailSeconds,
+          openPnlToDate: savedSettings.openPositionPnl === "toDate",
         });
       })
       .catch(() => {
@@ -378,6 +382,27 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     setSettings((current) => ({ ...current, [key]: value }));
   };
 
+  const changeOpenPositionPnl = async (mode: StudioSettings["openPositionPnl"]) => {
+    patch("openPositionPnl", mode);
+    if (!spec || !replayContext || spec.episode.status !== "open") return;
+    const request = replayRequestRef.current.begin();
+    try {
+      const nextSpec = await createReplaySpec(spec.episode, replayContext, spec.walletAddress, settings.candleInterval, request.signal, {
+        duration: settings.duration,
+        leadSeconds: settings.chartLeadSeconds,
+        trailSeconds: settings.chartTrailSeconds,
+        openEndSeconds: openPositionEndSeconds(spec.episode, replayContext, mode === "toDate"),
+      });
+      if (!replayRequestRef.current.isLatest(request.id)) return;
+      setSpec(nextSpec);
+      setError(geckoFallbackWarning(nextSpec));
+      await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
+    } catch (caught) {
+      if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
+      setError(caught instanceof Error ? caught.message : "Could not refresh the replay timeline.");
+    }
+  };
+
   const changeDuration = async (duration: number) => {
     setError("");
     const effectiveLead = settings.chartLeadSeconds ?? 0.12;
@@ -393,6 +418,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           duration,
           leadSeconds: settings.chartLeadSeconds,
           trailSeconds: settings.chartTrailSeconds,
+          openEndSeconds: openPositionEndSeconds(spec.episode, replayContext, settings.openPositionPnl === "toDate"),
         });
         if (!replayRequestRef.current.isLatest(request.id)) return false;
         setSpec(nextSpec);
@@ -425,6 +451,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           duration: settings.duration,
           leadSeconds,
           trailSeconds,
+          openEndSeconds: openPositionEndSeconds(spec.episode, replayContext, settings.openPositionPnl === "toDate"),
         });
         if (!replayRequestRef.current.isLatest(request.id)) return false;
         setSpec(nextSpec);
@@ -496,7 +523,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         <div className="wick-side-header"><div><span>EXPANDED CONTROLS</span><strong>Replay controls</strong></div><button type="button" aria-label="Collapse controls" onClick={() => setExpanded(false)}>→</button></div>
         <div className="wick-side-content">
           <section className="wick-side-section"><div className="wick-section-title"><h3>Chart style</h3><span>Default: Candlestick</span></div><select className="wick-sound-select" value={settings.chartStyle} onChange={(event) => patch("chartStyle", event.target.value as any)}><option value="candlestick">Candlestick</option><option value="bar">Bar (OHLC)</option><option value="line">Line</option><option value="area">Area</option></select><p>Choose the visual style of the price action data.</p></section>
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Fixed full timeline</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p><div className="wick-check-list" style={{ marginTop: '12px' }}><label className="wick-check"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patch("speedrunMode", event.target.checked)} /><span><b>Cinematic Speedrun</b><small>Accelerates time between trades, slows down during trades.</small></span></label></div></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Chart animation</h3><span>Default: Fixed full timeline</span></div><select className="wick-sound-select" value={settings.chartAnimation} onChange={(event) => patch("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select><p>Choose whether the camera expands with the trade, follows the active candle, or keeps the complete timeline fixed.</p><div className="wick-check-list" style={{ marginTop: '12px' }}><label className="wick-check"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patch("speedrunMode", event.target.checked)} /><span><b>Cinematic Speedrun</b><small>Accelerates time between trades, slows down during trades.</small></span></label>{spec?.episode.status === "open" && <label className="wick-check"><input type="checkbox" checked={settings.openPositionPnl === "toDate"} onChange={(event) => void changeOpenPositionPnl(event.target.checked ? "toDate" : "trade")} /><span><b>P&L to date</b><small>Marks your remaining bag at the latest price instead of ending at your last fill.</small></span></label>}</div></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Currency</h3><span>{settings.currency}</span></div><Segmented value={settings.currency} options={[{ value: "SOL", label: "SOL" }, { value: "USD", label: spec.usdPerSol ? "USD" : "USD unavailable" }]} onChange={(value) => spec.usdPerSol && patch("currency", value)} /></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Trade indicators</h3><span>Feed default</span></div><select className="wick-sound-select" value={settings.tradeIndicatorStyle} onChange={(event) => patch("tradeIndicatorStyle", event.target.value as TradeIndicatorStyle)}><option value="detailed">Detailed · BUY $2.9K</option><option value="feed">Feed · animated text</option><option value="hype">Hype · neon two-line</option><option value="minimal">Minimal · + / − only</option></select><p>Choose how executions appear in the chart and replay export.</p></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Timeline placement</h3><span>{settings.duration}s chart</span></div>
@@ -528,7 +555,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
 
         {view === "trade-choice" && relatedTradeChoice && <main className="wick-error-body wick-trade-choice"><div className="wick-kicker">RELATED TRADES FOUND</div><h1>Replay this trade or combine nearby activity?</h1><p>Fomo split this token into {relatedTradeChoice.tradeCount} position cycles within one hour. Combining them produces one continuous chart with cumulative P&amp;L.</p><div><button type="button" className="wick-secondary" onClick={() => tradeChoiceResolverRef.current?.(false)}>This trade only · {relatedTradeChoice.currentExecutions} executions</button><button type="button" className="wick-primary" onClick={() => tradeChoiceResolverRef.current?.(true)}>Combine {relatedTradeChoice.tradeCount} trades · {relatedTradeChoice.combinedExecutions} executions</button></div></main>}
 
-        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button>}</div></main>}
+        {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds, openPnlToDate: settings.openPositionPnl === "toDate" })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds, openPnlToDate: settings.openPositionPnl === "toDate" }, wallets); }}>Use wallet</button>}</div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} /></section>

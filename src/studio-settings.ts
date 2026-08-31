@@ -35,6 +35,7 @@ export interface StudioSettings {
   showAthLine: boolean;
   affiliateLink: string;
   speedrunMode: boolean;
+  openPositionPnl: "toDate" | "trade";
 }
 
 const soundNames = new Set<string>([
@@ -69,6 +70,7 @@ export const StudioSettingsSchema = z.object({
   showAthLine: z.boolean(),
   affiliateLink: z.string(),
   speedrunMode: z.boolean(),
+  openPositionPnl: z.enum(["toDate", "trade"]),
 });
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
@@ -98,6 +100,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   showAthLine: false,
   affiliateLink: "",
   speedrunMode: false,
+  openPositionPnl: "toDate",
 };
 
 export const ASPECT_PRESETS = [

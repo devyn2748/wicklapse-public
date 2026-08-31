@@ -359,6 +359,7 @@ export function selectFomoCandlesForTrade(
   executions: TradeExecution[],
   tokenAddress: string,
   chainId: string | null | undefined,
+  openPositionEndTimestamp?: number,
 ): ReplayCandle[] {
   const timestamps = executions.map((execution) => execution.timestamp).filter(Number.isFinite);
   if (!timestamps.length) return [];
@@ -367,7 +368,10 @@ export function selectFomoCandlesForTrade(
   const tradeSpan = Math.max(1, tradeEnd - tradeStart);
   const padding = Math.max(30, tradeSpan * 0.15);
   const windowStart = tradeStart - padding;
-  const windowEnd = tradeEnd + padding;
+  // For open positions the fetch runs through "now" (focusedFomoCandleUrl's
+  // openPositionEndTimestamp); keep that tail instead of trimming at the last
+  // fill, so "P&L to date" has candles to mark the remaining bag against.
+  const windowEnd = Math.max(tradeEnd, openPositionEndTimestamp ?? tradeEnd) + padding;
   return captures
     .filter((capture) => fomoCandleCaptureMatches(capture, tokenAddress, chainId))
     .map((capture) => {

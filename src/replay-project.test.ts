@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, geckoFallbackWarning, LatestReplayRequest, selectCandleRequest, selectFocusedFomoCandles } from "./replay-project";
+import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, geckoFallbackWarning, LatestReplayRequest, openPositionEndSeconds, selectCandleRequest, selectFocusedFomoCandles } from "./replay-project";
 
 const testTokenMint = "3".repeat(44);
 
@@ -79,6 +79,24 @@ describe("createReplaySpec", () => {
     expect(window?.toSeconds).toBe(episode.endTimestamp + 225);
     expect((episode.startTimestamp - window!.fromSeconds) / (window!.toSeconds - window!.fromSeconds)).toBeCloseTo(0.3, 8);
     expect((episode.endTimestamp - window!.fromSeconds) / (window!.toSeconds - window!.fromSeconds)).toBeCloseTo(0.7, 8);
+  });
+
+  it("extends an open position to the capture time only when the mode is on", () => {
+    const openEpisode = { status: "open" as const, endTimestamp: 1_700_000_500 };
+    const capture = { capturedAt: 1_700_003_000_000 };
+    expect(openPositionEndSeconds(openEpisode, capture, true)).toBe(1_700_003_000);
+    expect(openPositionEndSeconds(openEpisode, capture, false)).toBeNull();
+    expect(openPositionEndSeconds({ ...openEpisode, status: "closed" as const }, capture, true)).toBeNull();
+    // A capture at or before the last fill adds nothing.
+    expect(openPositionEndSeconds(openEpisode, { capturedAt: 1_700_000_400_000 }, true)).toBeNull();
+  });
+
+  it("widens the market window to the open-position end without touching the episode", () => {
+    const window = calculateReplayTimeWindow(
+      { ...episode, endTimestamp: 1_700_003_000 },
+      { duration: 10, leadSeconds: 3, trailSeconds: 3, openEndSeconds: 1_700_003_000 },
+    );
+    expect(window?.toSeconds).toBeGreaterThan(1_700_003_000);
   });
 
   it("rejects video margins that leave no meaningful trade playback", () => {

@@ -279,6 +279,28 @@ describe("Fomo capture", () => {
       .toHaveLength(3);
   });
 
+  it("keeps candles after the last fill when an open-position end is supplied", () => {
+    const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
+    const start = Date.parse("2026-08-28T16:00:00.000Z") / 1_000;
+    const end = Date.parse("2026-08-28T16:05:00.000Z") / 1_000;
+    const capture = {
+      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m&from=1&to=2&amount=1000`,
+      capturedAt: 1,
+      payload: { data: [
+        [start, 1, 2, 0.5, 1.5, 10],
+        [end, 1.5, 2, 1, 1.8, 10],
+        [end + 1_800, 1.8, 2.2, 1.6, 2.1, 10],
+        [end + 3_600, 2.1, 2.4, 2, 2.3, 10],
+      ] },
+    };
+    // Without an open end the tail past the last fill is trimmed.
+    expect(selectFomoCandlesForTrade([capture], context.tradeExecutions!, tokenAddress, "base"))
+      .toHaveLength(2);
+    // With the open end, the tail candles survive for "P&L to date".
+    expect(selectFomoCandlesForTrade([capture], context.tradeExecutions!, tokenAddress, "base", end + 3_600))
+      .toHaveLength(4);
+  });
+
   it("rejects a partial candle capture that covers only one of two combined trades", () => {
     const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
     const start = Date.parse("2026-08-28T16:00:00.000Z") / 1_000;

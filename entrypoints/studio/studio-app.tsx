@@ -19,12 +19,12 @@ import {
   type TradeFill,
 } from "../../src/domain";
 import { normalizeWalletAddresses } from "../../src/axiom-api";
-import { BUNDLED_BACKDROPS, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "../../src/backdrops";
+import { BUNDLED_BACKDROPS, createCustomVideoBackdrop, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "../../src/backdrops";
 import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildProviderExecutionEpisodes } from "../../src/provider-capture";
 import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
-import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
+import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, openPositionEndSeconds, type CandleIntervalPreference } from "../../src/replay-project";
 import { drawReplayFrame, type ChartAnimation, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
 import {
@@ -419,7 +419,7 @@ export function StudioApp(): JSX.Element {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
-  const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
+  const [backgroundImage, setBackgroundImage] = useState<BundledBackdropMedia | null>(null);
   const [bundledBackgroundImage, setBundledBackgroundImage] = useState<BundledBackdropMedia | null>(null);
   const bundledBackgroundRef = useRef<BundledBackdropMedia | null>(null);
   const [musicBuffer, setMusicBuffer] = useState<AudioBuffer | null>(null);
@@ -461,7 +461,7 @@ export function StudioApp(): JSX.Element {
   }, []);
 
   useEffect(() => () => replayRequestRef.current.cancel(), []);
-  useEffect(() => () => backgroundImage?.close(), [backgroundImage]);
+  useEffect(() => () => disposeBundledBackdrop(backgroundImage), [backgroundImage]);
   useEffect(() => {
     let active = true;
     const orientation = settings.height > settings.width ? "9:16" : "16:9";
@@ -502,11 +502,19 @@ export function StudioApp(): JSX.Element {
     });
   };
 
+  const changeOpenPositionPnl = async (mode: StudioSettings["openPositionPnl"]) => {
+    patchSettings("openPositionPnl", mode);
+    if (spec?.episode.status === "open") {
+      await rebuildChart(settings.candleInterval, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, mode);
+    }
+  };
+
   const rebuildChart = async (
     value: CandleIntervalPreference,
     leadSeconds: number | null,
     trailSeconds: number | null,
     duration = settings.duration,
+    openPnl: StudioSettings["openPositionPnl"] = settings.openPositionPnl,
   ) => {
     if (!spec || !context) return false;
     const request = replayRequestRef.current.begin();
@@ -517,6 +525,7 @@ export function StudioApp(): JSX.Element {
         duration,
         leadSeconds,
         trailSeconds,
+        openEndSeconds: openPositionEndSeconds(spec.episode, context, openPnl === "toDate"),
       });
       if (!replayRequestRef.current.isLatest(request.id)) return false;
       setSpec(nextSpec);
@@ -681,6 +690,7 @@ export function StudioApp(): JSX.Element {
         duration: settings.duration,
         leadSeconds: settings.chartLeadSeconds,
         trailSeconds: settings.chartTrailSeconds,
+        openEndSeconds: openPositionEndSeconds(selectedEpisode, sourceContext, settings.openPositionPnl === "toDate"),
       });
       if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
@@ -753,7 +763,7 @@ export function StudioApp(): JSX.Element {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setError("The first build supports image backgrounds. Video backgrounds are next in the Advanced pipeline.");
+      setError("That is not an image. Use the Background video field for video files.");
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
@@ -772,6 +782,33 @@ export function StudioApp(): JSX.Element {
       setError("");
     } catch {
       setError("This background image could not be decoded by Chrome.");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const loadBackgroundVideo = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("video/")) {
+      setError("Choose a video file (MP4 H.264 or WebM works best).");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 100 * 1024 * 1024) {
+      setError("Background videos must be 100 MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+    try {
+      const video = await createCustomVideoBackdrop(file);
+      // Swapping state disposes the previous custom backdrop via its effect
+      // cleanup; the renderer cover-crops the video for 16:9 and 9:16 alike.
+      setBackgroundImage(video);
+      setPreviewRevision((revision) => revision + 1);
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "This video could not be loaded.");
     } finally {
       event.target.value = "";
     }
@@ -1007,6 +1044,7 @@ export function StudioApp(): JSX.Element {
                 <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : ""}</span><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
                 <label>Chart animation<select value={settings.chartAnimation} onChange={(event) => patchSettings("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom (default)</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select></label>
                 <label className="check-row"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patchSettings("speedrunMode", event.target.checked)} />Cinematic Speedrun</label>
+                {spec?.episode.status === "open" && <label className="check-row"><input type="checkbox" checked={settings.openPositionPnl === "toDate"} onChange={(event) => void changeOpenPositionPnl(event.target.checked ? "toDate" : "trade")} />P&L to date · marks your remaining bag at the latest price</label>}
                 <label>First buy at (video seconds)<input key={`lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto (0.12s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value); else event.currentTarget.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
                 <label>Chart after final sell (seconds)<input key={`trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto (0.65s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value); else event.currentTarget.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
                 <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
@@ -1037,7 +1075,7 @@ export function StudioApp(): JSX.Element {
                 setBackgroundImage(null);
                 patchSettings("backgroundStyle", event.target.value as BackgroundStyle);
               }}><option value="glow">Ambient Glow</option><option value="solid">Solid Color</option><option value="grid">Retro Grid</option><option value="particles">Particles</option>{BUNDLED_BACKDROPS.map((backdrop) => <option key={backdrop.value} value={backdrop.value}>{backdrop.label}</option>)}</select></label>
-              <div className="media-upload-grid"><label>Background image<input type="file" accept="image/*" onChange={(event) => void loadBackground(event)} /></label><label>Custom music<input type="file" accept="audio/*" onChange={(event) => void loadMusic(event)} /></label></div>
+              <div className="media-upload-grid"><label>Background image<input type="file" accept="image/*" onChange={(event) => void loadBackground(event)} /></label><label>Background video<input type="file" accept="video/*" onChange={(event) => void loadBackgroundVideo(event)} /></label><label>Custom music<input type="file" accept="audio/*" onChange={(event) => void loadMusic(event)} /></label></div>
             </section>
 
             <section className="inspector-card" id="advanced-audio">

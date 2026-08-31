@@ -102,6 +102,7 @@ function capturedContext(pageUrl = location.href, explicitTradeId?: string): Sha
     baseContext.tradeExecutions ?? [],
     baseContext.tokenMint,
     baseContext.chainId,
+    baseContext.positionStatus === "open" ? Date.now() / 1_000 : undefined,
   );
   return ShareContextSchema.parse({ ...baseContext, capturedCandles });
 }
@@ -183,7 +184,7 @@ async function retrieveTradeContext(
             : { capture: null, error: "The Fomo candle URL could not be created." };
           if (signal?.aborted) throw new DOMException("Fomo capture aborted", "AbortError");
           const focusedCandles = focusedResult.capture
-            ? selectFomoCandlesForTrade([focusedResult.capture], context.tradeExecutions, context.tokenMint, context.chainId)
+            ? selectFomoCandlesForTrade([focusedResult.capture], context.tradeExecutions, context.tokenMint, context.chainId, context.positionStatus === "open" ? Date.now() / 1_000 : undefined)
             : [];
           if (focusedCandles.length >= 2) {
             const enriched = ShareContextSchema.parse({ ...context, capturedCandles: focusedCandles });

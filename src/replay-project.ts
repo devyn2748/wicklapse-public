@@ -50,6 +50,21 @@ export interface ReplayTimelineOptions {
   duration: number;
   leadSeconds: number | null;
   trailSeconds: number | null;
+  /** For open positions shown "to date": extend the market window to this
+   *  unix-seconds timestamp so remaining holdings mark to the latest price. */
+  openEndSeconds?: number | null;
+}
+
+/** End timestamp for an open position rendered "to date", or null when the
+ *  episode is closed, the mode is off, or the capture adds nothing. */
+export function openPositionEndSeconds(
+  episode: Pick<TradeEpisode, "status" | "endTimestamp">,
+  context: Pick<ShareContext, "capturedAt">,
+  enabled: boolean,
+): number | null {
+  if (!enabled || episode.status !== "open") return null;
+  const capturedSeconds = Math.floor((context.capturedAt || Date.now()) / 1_000);
+  return capturedSeconds > episode.endTimestamp ? capturedSeconds : null;
 }
 
 export function calculateReplayTimeWindow(
@@ -302,13 +317,22 @@ async function getMarketHistory(
   const windowStart = timeWindow?.fromSeconds ?? Math.max(0, episode.startTimestamp - fomoPadding);
   const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp + fomoPadding;
   const spanSeconds = Math.max(1, windowEnd - windowStart);
+  let fomoHistory: MarketHistory | null = null;
   if (context.provider === "fomo" && context.capturedCandles && context.capturedCandles.length >= 2) {
     const source = selectFocusedFomoCandles(context.capturedCandles, windowStart, windowEnd);
     const request = selectCandleRequest(spanSeconds, candleInterval);
     const sourceInterval = Math.max(1, Math.min(...source.slice(1).map((candle, index) => candle.timestamp - source[index]!.timestamp).filter((value) => value > 0)));
     const candles = request.interval > sourceInterval ? aggregateCandles(source, request.interval) : source;
     if (candles.length >= 2) {
-      return { candles, points: buildMarkToMarketPoints(episode, candles), interval: Math.max(sourceInterval, request.interval), source: "fomo" };
+      const interval = Math.max(sourceInterval, request.interval);
+      const history: MarketHistory = { candles, points: buildMarkToMarketPoints(episode, candles), interval, source: "fomo" };
+      // Older captures trimmed candles at the last fill, so an extended
+      // "to date" window can outrun them. When the stored candles stop far
+      // short of the requested end, try the fallback providers for full
+      // coverage and keep this as the last resort.
+      const tailGapSeconds = windowEnd - fomoPadding - candles.at(-1)!.timestamp;
+      if (tailGapSeconds <= Math.max(interval * 5, 300)) return history;
+      fomoHistory = history;
     }
   }
   if (episode.fills.some((fill) => fill.source === "axiom")) {
@@ -326,10 +350,10 @@ async function getMarketHistory(
     }
   }
   const geckoNetwork = context.provider === "fomo" ? geckoNetworkForChainId(context.chainId) : "solana";
-  if (!geckoNetwork) return null;
+  if (!geckoNetwork) return fomoHistory;
   onStatus?.("Primary candles unavailable — preparing the public fallback…");
   const geckoPoolAddress = await resolveGeckoPoolAddress(context, geckoNetwork, signal, onStatus);
-  if (!geckoPoolAddress) return null;
+  if (!geckoPoolAddress) return fomoHistory;
   const preferredRequest = selectCandleRequest(spanSeconds, candleInterval);
   const preferredIndex = CANDLE_REQUESTS.indexOf(preferredRequest);
   const seenSources = new Set<string>();
@@ -343,7 +367,7 @@ async function getMarketHistory(
     const result = await getMarketHistoryAtInterval(geckoNetwork, geckoPoolAddress, episode, spanSeconds, request, signal, timeWindow, onStatus);
     if (result) return result;
   }
-  return null;
+  return fomoHistory;
 }
 
 async function resolveGeckoPoolAddress(
@@ -445,10 +469,17 @@ export async function createReplaySpec(
   const tradeDataSource = episode.fills.some((fill) => fill.source === "fomo")
     ? "fomo"
     : episode.fills.some((fill) => fill.source === "axiom") ? "axiom" : "rpc";
-  const timeWindow = calculateReplayTimeWindow(episode, timelineOptions);
+  // "To date" for an open position: extend only the market-history window so
+  // candles (and mark-to-market points) run through the capture time. The
+  // episode itself is left untouched - fills, status and totals are unchanged.
+  const openEndSeconds = timelineOptions?.openEndSeconds ?? null;
+  const historyEpisode = openEndSeconds != null && openEndSeconds > episode.endTimestamp
+    ? { ...episode, endTimestamp: openEndSeconds }
+    : episode;
+  const timeWindow = calculateReplayTimeWindow(historyEpisode, timelineOptions);
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(signal),
-    getMarketHistory(context, episode, candleInterval, signal, timeWindow, onStatus),
+    getMarketHistory(context, historyEpisode, candleInterval, signal, timeWindow, onStatus),
     getMarketCapMultiplier(context, signal),
   ]);
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
