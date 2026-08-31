@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShareContext, TradeEpisode, TradeFill } from "./domain";
-import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, LatestReplayRequest, selectCandleRequest, selectFocusedFomoCandles } from "./replay-project";
+import { buildMarkToMarketPoints, calculateReplayTimeWindow, createReplaySpec, geckoFallbackWarning, LatestReplayRequest, selectCandleRequest, selectFocusedFomoCandles } from "./replay-project";
 
 const testTokenMint = "3".repeat(44);
 
@@ -251,6 +251,105 @@ describe("createReplaySpec", () => {
     const spec = await createReplaySpec(episode, context, "7YWHMfk9JZe0LMjUW4wNVe2xfqPTiyecVji4tYdLu2iY");
     expect(spec.points).toHaveLength(2);
     expect(spec.points.map((point) => point.priceSol)).toEqual(["1", "3"]);
+    expect(geckoFallbackWarning(spec)).toContain("execution points only");
+  });
+
+  it("resolves a Base token pool before using chain-specific GeckoTerminal candles", async () => {
+    const tokenAddress = "0x1111111111111111111111111111111111111111";
+    const poolAddress = "0x2222222222222222222222222222222222222222";
+    const baseContext: ShareContext = {
+      ...context,
+      provider: "fomo",
+      chainId: "base",
+      tokenMint: tokenAddress,
+      pairAddress: tokenAddress,
+    };
+    const baseEpisode: TradeEpisode = {
+      ...episode,
+      tokenMint: tokenAddress,
+      quoteCurrency: "USD",
+      quoteScale: "1000000",
+      fills: episode.fills.map((fill) => ({
+        ...fill,
+        tokenMint: tokenAddress,
+        source: "fomo" as const,
+        chainId: "base",
+        quoteCurrency: "USD" as const,
+        quoteScale: "1000000",
+      })),
+    };
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      if (url.includes(`/tokens/${tokenAddress}/pools`)) return new Response(JSON.stringify({ data: [{
+        id: `base_${poolAddress}`,
+        attributes: { address: poolAddress, reserve_in_usd: "250000" },
+      }] }), { status: 200 });
+      if (url.includes(`/networks/base/pools/${poolAddress}/ohlcv/`)) return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
+        [episode.startTimestamp + 240, 2, 3, 1.8, 2.8, 4],
+        [episode.startTimestamp + 120, 1, 2.2, 0.8, 2, 3],
+      ] } } }), { status: 200 });
+      return new Response("not found", { status: 404 });
+    }));
+
+    const spec = await createReplaySpec(baseEpisode, baseContext, "", "auto");
+    expect(spec.marketDataSource).toBe("gecko");
+    expect(geckoFallbackWarning(spec)).toContain("fallback candles");
+    expect(requestedUrls.some((url) => url.includes(`/networks/base/tokens/${tokenAddress}/pools`))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes(`/networks/base/pools/${poolAddress}/ohlcv/`))).toBe(true);
+    expect(requestedUrls.some((url) => url.includes("/networks/solana/"))).toBe(false);
+  });
+
+  it("retries a transient GeckoTerminal candle failure before using execution points", async () => {
+    const tokenAddress = "0x1234567890abcdef1234567890abcdef12345678";
+    const poolAddress = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    const retryStatuses: string[] = [];
+    let candleAttempts = 0;
+    const baseContext: ShareContext = {
+      ...context,
+      provider: "fomo",
+      chainId: "base",
+      tokenMint: tokenAddress,
+      pairAddress: tokenAddress,
+    };
+    const baseEpisode: TradeEpisode = {
+      ...episode,
+      tokenMint: tokenAddress,
+      quoteCurrency: "USD",
+      quoteScale: "1000000",
+      fills: episode.fills.map((fill) => ({
+        ...fill,
+        tokenMint: tokenAddress,
+        source: "fomo" as const,
+        chainId: "base",
+        quoteCurrency: "USD" as const,
+        quoteScale: "1000000",
+      })),
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("simple/price")) return new Response("{}", { status: 200 });
+      if (url.includes(`/tokens/${tokenAddress}/pools`)) return new Response(JSON.stringify({ data: [{
+        id: `base_${poolAddress}`,
+        attributes: { address: poolAddress, reserve_in_usd: "250000" },
+      }] }), { status: 200 });
+      if (url.includes(`/networks/base/pools/${poolAddress}/ohlcv/`)) {
+        candleAttempts += 1;
+        if (candleAttempts === 1) return new Response("temporarily unavailable", { status: 503 });
+        return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
+          [episode.startTimestamp + 240, 2, 3, 1.8, 2.8, 4],
+          [episode.startTimestamp + 120, 1, 2.2, 0.8, 2, 3],
+        ] } } }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }));
+
+    const spec = await createReplaySpec(baseEpisode, baseContext, "", "auto", undefined, undefined, (message) => retryStatuses.push(message));
+    expect(spec.marketDataSource).toBe("gecko");
+    expect(candleAttempts).toBe(2);
+    expect(retryStatuses).toContain("Loading fallback candles — retrying (2/3)…");
   });
 });
 

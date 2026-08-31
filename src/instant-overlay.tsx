@@ -6,7 +6,7 @@ import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "./export-video";
-import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
+import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "./replay-project";
 import { drawReplayFrame, type BackgroundStyle, type ChartAnimation, type RenderConfig, type ThemeName, type TradeIndicatorStyle } from "./renderer";
 import {
   loadStudioSettings,
@@ -21,11 +21,21 @@ const logoUrl = browser.runtime.getURL("/icon.png");
 
 interface InstantOverlayProps {
   context: ShareContext;
-  resolveContext?: (signal?: AbortSignal, manualWallets?: string[]) => Promise<ShareContext>;
+  resolveContext?: (
+    signal?: AbortSignal,
+    manualWallets?: string[],
+    onStatus?: (message: string) => void,
+  ) => Promise<ShareContext>;
   onClose: () => void;
 }
 
-type View = "booting" | "instant" | "error";
+type View = "booting" | "trade-choice" | "instant" | "error";
+
+interface RelatedTradeChoice {
+  tradeCount: number;
+  currentExecutions: number;
+  combinedExecutions: number;
+}
 
 function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: ImageBitmap | null }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -56,12 +66,13 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
         height: previewHeight,
         chartLeadSeconds: settings.chartLeadSeconds,
         chartTrailSeconds: settings.chartTrailSeconds,
+        speedrunMode: settings.speedrunMode,
       }) / settings.duration;
       if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
       soundedEventsRef.current.add(fill.signature);
       void playReplaySound(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
     }
-  }, [previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, spec]);
+  }, [previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, settings.speedrunMode, spec]);
 
   const draw = useCallback((next: number) => {
     const canvas = canvasRef.current;
@@ -170,6 +181,8 @@ function Segmented<T extends string | number>({
 
 export function InstantOverlay({ context, resolveContext, onClose }: InstantOverlayProps): JSX.Element {
   const [view, setView] = useState<View>("booting");
+  const [relatedTradeChoice, setRelatedTradeChoice] = useState<RelatedTradeChoice | null>(null);
+  const tradeChoiceResolverRef = useRef<((combine: boolean) => void) | null>(null);
   const [spec, setSpec] = useState<ReplaySpec | null>(null);
   const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
   const [replayContext, setReplayContext] = useState<ShareContext | null>(null);
@@ -181,6 +194,27 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   const [expanded, setExpanded] = useState(false);
   const [backgroundImage, setBackgroundImage] = useState<ImageBitmap | null>(null);
   const backgroundImageRef = useRef<ImageBitmap | null>(null);
+
+  const requestRelatedTradeChoice = useCallback((choice: RelatedTradeChoice, signal: AbortSignal): Promise<boolean> => {
+    if (signal.aborted) return Promise.reject(new DOMException("Replay request aborted", "AbortError"));
+    setRelatedTradeChoice(choice);
+    setView("trade-choice");
+    return new Promise<boolean>((resolve, reject) => {
+      const finish = (combine: boolean) => {
+        signal.removeEventListener("abort", abort);
+        tradeChoiceResolverRef.current = null;
+        setRelatedTradeChoice(null);
+        resolve(combine);
+      };
+      const abort = () => {
+        tradeChoiceResolverRef.current = null;
+        setRelatedTradeChoice(null);
+        reject(new DOMException("Replay request aborted", "AbortError"));
+      };
+      tradeChoiceResolverRef.current = finish;
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  }, []);
 
   const buildCapturedReplay = useCallback(async (
     candleInterval: CandleIntervalPreference = "auto",
@@ -198,22 +232,47 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
       const providerName = context.provider === "fomo" ? "Fomo" : "Axiom";
       setStatus(`Retrieving the latest ${providerName} executions…`);
       const enrichedContext = resolveContext
-        ? await resolveContext(request.signal, manualWallets)
+        ? await resolveContext(request.signal, manualWallets, setStatus)
         : context;
       if (!enrichedContext.tradeExecutions?.length) throw new Error(`No replayable ${providerName} executions were returned for this trade.`);
-      await saveShareContext(enrichedContext);
-      setReplayContext(enrichedContext);
-      const episodes = buildProviderExecutionEpisodes(enrichedContext);
+      const providerTradeIds = new Set(enrichedContext.tradeExecutions.map((execution) => execution.providerTradeId).filter(Boolean));
+      let replaySourceContext = enrichedContext;
+      if (providerName === "Fomo" && providerTradeIds.size > 1) {
+        const currentExecutions = enrichedContext.primaryTradeExecutions?.length
+          ? enrichedContext.primaryTradeExecutions
+          : enrichedContext.tradeExecutions.filter((execution) => execution.providerTradeId === enrichedContext.providerTradeId);
+        const combine = await requestRelatedTradeChoice({
+          tradeCount: providerTradeIds.size,
+          currentExecutions: currentExecutions.length,
+          combinedExecutions: enrichedContext.tradeExecutions.length,
+        }, request.signal);
+        if (!combine && currentExecutions.length) {
+          replaySourceContext = {
+            ...enrichedContext,
+            tradeExecutions: currentExecutions,
+            primaryTradeExecutions: currentExecutions,
+            sourceText: `Fomo trade ${enrichedContext.providerTradeId ?? "selected"}`,
+          };
+        }
+        setView("booting");
+      }
+      await saveShareContext(replaySourceContext);
+      setReplayContext(replaySourceContext);
+      const episodes = buildProviderExecutionEpisodes(replaySourceContext);
       const episode = selectCurrentTradeEpisode(episodes);
       if (!episode) {
         throw new Error(`No replayable buys or sells were found in this ${providerName} trade.`);
       }
-      setStatus(`Building from ${episode.fills.length} ${providerName} execution${episode.fills.length === 1 ? "" : "s"}…`);
-      const nextSpec = await createReplaySpec(episode, enrichedContext, enrichedContext.walletAddress ?? "", candleInterval, request.signal, timelineOptions);
-      if (!replayRequestRef.current.isLatest(request.id) || context.provider !== enrichedContext.provider) return;
+      const providerTradeCount = new Set(replaySourceContext.tradeExecutions?.map((execution) => execution.providerTradeId).filter(Boolean)).size;
+      setStatus(providerName === "Fomo" && providerTradeCount > 1
+        ? `Combining ${providerTradeCount} nearby Fomo trades (${episode.fills.length} executions)…`
+        : `Building from ${episode.fills.length} ${providerName} execution${episode.fills.length === 1 ? "" : "s"}…`);
+      const nextSpec = await createReplaySpec(episode, replaySourceContext, replaySourceContext.walletAddress ?? "", candleInterval, request.signal, timelineOptions, setStatus);
+      if (!replayRequestRef.current.isLatest(request.id) || context.provider !== replaySourceContext.provider) return;
       setSpec(nextSpec);
+      setError(geckoFallbackWarning(nextSpec));
       if (nextSpec.accountingCurrency === "USD") setSettings((current) => ({ ...current, currency: "USD" }));
-      await saveProject({ shareContext: enrichedContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
+      await saveProject({ shareContext: replaySourceContext, replaySpec: nextSpec, selectedEpisodeId: episode.id });
       setView("instant");
     } catch (caught) {
       if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
@@ -298,6 +357,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         });
         if (!replayRequestRef.current.isLatest(request.id)) return false;
         setSpec(nextSpec);
+        setError(geckoFallbackWarning(nextSpec));
         await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
       } catch (caught) {
         if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return false;
@@ -329,6 +389,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         });
         if (!replayRequestRef.current.isLatest(request.id)) return false;
         setSpec(nextSpec);
+        setError(geckoFallbackWarning(nextSpec));
         await saveProject({ shareContext: replayContext, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
       } catch (caught) {
         if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return false;
@@ -425,11 +486,14 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
 
         {view === "booting" && <main className="wick-loading"><span className="wick-spinner" /><h2>{status}</h2><p>{context.provider === "fomo" ? "Fomo" : "Axiom"} trade capture and rendering remain on this device.</p></main>}
 
+        {view === "trade-choice" && relatedTradeChoice && <main className="wick-error-body wick-trade-choice"><div className="wick-kicker">RELATED TRADES FOUND</div><h1>Replay this trade or combine nearby activity?</h1><p>Fomo split this token into {relatedTradeChoice.tradeCount} position cycles within one hour. Combining them produces one continuous chart with cumulative P&amp;L.</p><div><button type="button" className="wick-secondary" onClick={() => tradeChoiceResolverRef.current?.(false)}>This trade only · {relatedTradeChoice.currentExecutions} executions</button><button type="button" className="wick-primary" onClick={() => tradeChoiceResolverRef.current?.(true)}>Combine {relatedTradeChoice.tradeCount} trades · {relatedTradeChoice.combinedExecutions} executions</button></div></main>}
+
         {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds }, wallets); }}>Use wallet</button>}</div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
           <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} /></section>
           <section className="wick-controls">
+            {error && <div className="wick-error" role="alert">{error}</div>}
             <div className="wick-control-section"><div className="wick-section-title"><h3>Video duration</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
             <div className="wick-control-section"><div className="wick-section-title"><h3>Aspect ratio</h3><span>{settings.aspectRatio}</span></div><Segmented value={settings.aspectRatio} options={[{ value: "16:9", label: "16:9" }, { value: "9:16", label: "9:16" }]} onChange={(value) => patch("aspectRatio", value)} /></div>
             <div className="wick-control-section">
@@ -476,7 +540,6 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
               <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">Off</option></select></div>
             </div>
             <div className="wick-export-zone">
-              {error && <div className="wick-error">{error}</div>}
               {exportProgress !== null && <div className="wick-export-progress"><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b><progress max={1} value={exportProgress} /></div>}
               <button type="button" className="wick-primary wick-export" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "Download"}</button>
               <div className="wick-bottom-actions"><button type="button" className="wick-secondary" onClick={() => setExpanded(true)}>Replay controls</button><button type="button" className="wick-secondary" onClick={() => setExpanded(true)}>Customize →</button></div>

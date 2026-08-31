@@ -1,71 +1,41 @@
 # Wicklapse
 
-Wicklapse is a Manifest V3 Chrome extension that turns a selected Axiom spot trade into an animated, locally rendered video.
+Wicklapse is a Manifest V3 Chrome extension that turns crypto trades from **Fomo** and **Axiom** into animated, locally rendered P&L replay videos.
 
-## Install the test build
+## Platform Support
 
-1. Open `chrome://extensions` in Chrome.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Run `npm run build`, then select `Wicklapse-Unpacked` from this project.
-5. Reload any Axiom tabs that were already open when Wicklapse was installed.
-6. Open the Axiom Share dialog and choose **Create Trade Replay with Wicklapse**. The toolbar icon can open the same flow from an active Axiom page.
+- **Fomo**: Works for **ANY** trade by **ANY** user. You can generate replays for any profile or trade you view on Fomo.
+- **Axiom**: Currently limited to your **own** trades using your signed-in Axiom session.
 
-Instant Export automatically reads the signed-in account's public, non-archived Solana trading wallets from Axiom, combines them as one position, and sends them with the current `/meme/{pairAddress}` to Axiom's authenticated transactions feed. It does not open or scrape **My Trades**, inspect credentials, or require an RPC key. Expanded replay controls now open as an attached panel inside Axiom instead of creating a separate tab.
+## Current Features
 
-## Test the Axiom-to-video flow
+- **Zero User Input Required**: Just open a trade page and open the extension. Wicklapse automatically detects the context, wallets, executions, and price history without you needing to copy, paste, or configure anything.
+- **Instant Export Overlay**: An in-page, expandable control panel that attaches directly to the Fomo or Axiom page, allowing you to preview and export videos without leaving the chart.
+- **Customizable Composition**: Adjust video duration, resolution, aspect ratio (16:9 Landscape or 9:16 Portrait), and exact first-buy/final-sell placement on the timeline.
+- **Cinematic Speedrun Mode**: Accelerates time between sparse trades and slows down during active trading windows for a dynamic viewing experience.
+- **Visual Customization**:
+  - Chart styles: Candlestick, Bar (OHLC), Line, or Area.
+  - Backgrounds: Procedural options (Ambient Glow, Solid, Retro Grid, Particles) and bundled image backdrops (Aurora, Cyberpunk, etc.).
+  - Indicator styles: Detailed (default), Feed (animated text), or Hype (neon two-line).
+- **Audio & Sound Effects**: Timeline-synchronized Buy and Sell audio with numerous bundled presets (Hitmarker, Cash Register, Mario Coin, etc.) or custom audio uploads.
+- **Advanced Indicators**: Optional Average Buy and Average Sell levels that recalculate on every execution, plus a truthful ATH overlay.
+- **Accurate Market Data**: Leverages Fomo's active session for precise candle fetching, Axiom's `pair-chart-v3` with dynamic intervals, and GeckoTerminal fallbacks.
+- **Mark-to-Market P&L**: Tracks running P&L, ROI, and position multiples accurately throughout the trade timeline, supporting both SOL and USD (where available) currencies.
+- **Local Rendering**: Renders canvas animations locally in your browser and exports directly to MP4 (or WebM fallback) in real-time.
 
-1. Open an Axiom spot token page and its Share dialog.
-2. Confirm the Wicklapse entry appears once and does not interfere with Axiom's controls.
-3. Confirm Instant Export detects all public Solana trading wallets in the signed-in Axiom account without asking for wallet input.
-4. Confirm it opens without changing the active Axiom table/filter and automatically retrieves every matching buy, sell, and partial fill across those wallets.
-5. Preview the default 16:9 X landscape replay at several durations, themes, currencies, and Buy/Sell sound dropdown choices.
-6. Export the video and verify its duration, 1920×1080 dimensions, audio timing, running mark-to-market P&L, OHLC candles, and buy/sell markers.
-7. Expand the attached control panel and test currency, chart animation, custom clip duration, first-buy placement, and post-sell padding.
-8. Close and reopen Wicklapse to confirm the Axiom-first Instant flow remains available.
+## Development & Building
 
-## Development
-
+To run the extension in development mode with hot-reloading:
 ```bash
 npm install
 npm run dev
 ```
+Then load the generated unpacked extension from `.output/chrome-mv3-dev` in Chrome (`chrome://extensions` > Developer mode > Load unpacked).
 
-Load the generated Chromium extension from `.output/chrome-mv3-dev` when using a regular Chrome profile.
+### Building for Chrome
 
-## Test build scope
-
-- Axiom Share dialog integration
-- Automatic Axiom public-wallet discovery and batched transaction-feed lookup by current pair across multiple wallets
-- Compact-row validation, malformed-row isolation, signature deduplication, and chronological normalization
-- Automatic Axiom wallet detection with previously saved public wallets as a local fallback
-- In-page Instant Export with an expandable control panel attached to its left edge
-- Compact right-side Instant panel that leaves the Axiom chart visible and interactive instead of dimming the entire page
-- Social-first replay with oversized running P&L/ROI/multiple, initial buy, and large consolidated execution markers
-- Axiom `pair-chart-v3` candles with native dynamic intervals, GeckoTerminal fallback, and execution-path fallback
-- Low-cap market-cap chart scale with automatic `$K`/`$M`/`$B` labels
-- Trading-style candle bodies, sequentially developing wicks, volume, price scale, and grid with no future candles or future scale values revealed
-- Expanded-panel chart motion modes: progressive auto-fit (default), rolling follow, and a fixed full-timeline camera
-- Optional horizontal Average Buy and Average Sell levels that recalculate on every execution, plus a truthful Axiom ATH overlay that becomes a line only when the clip reaches ATH and otherwise stays as a top-edge value badge
-- Custom fractional video duration and lead/tail placement backed by real market history—for example, first buy at 3s and final sell at 7s in a 10s clip; clear either padding field to restore Auto
-- Duration-aware replay pacing that uses the full selected clip length with a consistent 0.65-second final hold
-- Improved automatic candle density plus Auto, 1s, 5s, and 1m interval controls; 5s bars are aggregated locally from real 1s OHLCV and unsafe overrides are coarsened just enough to preserve the full trade
-- Sparse-market OHLC recovery with empty-interval fills and progressively coarser provider-supported retries
-- Race-safe candle switching so an older response can never overwrite the newest selection
-- Automatic preview restart from 0:00 after duration, candle, theme, currency, audio, aspect, quality, background, or other studio configuration changes
-- Timeline-synchronized Buy and Sell audio in both the in-page preview and exported video
-- Timeline-synchronized bundled Buy/Sell sounds with partial fills consolidated to the same audible event as their visible marker
-- Thirteen bundled Buy/Sell presets—including Hitmarker, Apple Pay, Cash Register, GTA Pickup, Mario Coin, Pop, and Gaming Punch—available by default in both dropdowns
-- Mark-to-market P&L throughout the position instead of buy/sell cash-flow jumps
-- SOL/USD presentation
-- Local canvas preview and video export
-
-## Current first-build limitations
-
-- Exact executions and automatic wallet discovery depend on the signed-in Axiom session and the stability of Axiom's wallet and `transactions-feed-v4` endpoints; provider-specific payloads remain isolated from the replay UI.
-- Token symbol, mint, image, and optional P&L summary still come from the active Axiom coin page. Chart DOM data is not read.
-- Market candles use Axiom `pair-chart-v3` first and GeckoTerminal second; otherwise the renderer labels and uses the execution-price path rather than inventing candles. Historical market-cap scaling still depends on GeckoTerminal and may fall back to pool FDV.
-- USD display uses the current SOL/USD rate rather than the historical rate at each fill.
-- Additional expanded-panel controls—including custom media uploads and privacy presentation—will move into the in-page workflow in later builds.
-- Export uses MP4/H.264 when the browser exposes that encoder and otherwise downloads WebM/VP9.
-- Export is rendered in real time in this build, so a 15-second replay takes about 15 seconds to produce.
+To generate the final, unpacked extension for regular use:
+```bash
+npm run build
+```
+This command runs tests, builds the extension, and syncs the output to the `Wicklapse-Unpacked` folder. You can then load the `Wicklapse-Unpacked` folder into Chrome via **Load unpacked**.

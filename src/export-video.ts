@@ -141,7 +141,7 @@ export async function playReplaySound(
 export function replayEventOffset(
   fill: TradeFill,
   spec: ReplaySpec,
-  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds">,
+  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds" | "speedrunMode">,
 ): number {
   const offset = replayEventVisualProgress(
     fill,
@@ -151,6 +151,7 @@ export function replayEventOffset(
     config.duration,
     config.chartLeadSeconds,
     config.chartTrailSeconds,
+    config.speedrunMode,
   ) * config.duration;
   return Math.max(0.01, Math.min(config.duration - 0.01, offset));
 }

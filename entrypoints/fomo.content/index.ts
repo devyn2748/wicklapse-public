@@ -4,10 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { ShareContextSchema, type ShareContext } from "../../src/domain";
 import {
   fomoHandleFromUrl,
+  fomoCandleCaptureMatches,
   fomoTradeIdFromUrl,
   focusedFomoCandleUrl,
-  parseFomoCandles,
   parseFomoTradeResponse,
+  selectFomoCandlesForTrade,
   type FomoCapturedResponse,
 } from "../../src/fomo-api";
 import { FOMO_BRIDGE_MESSAGE_SOURCE } from "../../src/fomo-bridge";
@@ -16,8 +17,12 @@ import overlayStyles from "../../src/instant-overlay.css?inline";
 import { saveShareContext } from "../../src/storage";
 
 const captures: FomoCapturedResponse[] = [];
+interface FocusedCandleResult {
+  capture: FomoCapturedResponse | null;
+  error: string | null;
+}
 const pendingCandleRequests = new Map<string, {
-  resolve: (capture: FomoCapturedResponse | null) => void;
+  resolve: (result: FocusedCandleResult) => void;
   timeout: ReturnType<typeof setTimeout>;
 }>();
 
@@ -54,19 +59,6 @@ function currentPlaceholderContext(): ShareContext {
   });
 }
 
-function isCandleCaptureForToken(capture: FomoCapturedResponse, tokenAddress: string): boolean {
-  try {
-    const url = new URL(capture.url);
-    if (url.hostname === "fomo-api.mobula.io") {
-      return url.searchParams.get("address")?.toLowerCase() === tokenAddress.toLowerCase();
-    }
-    const bodyText = JSON.stringify(capture.requestBody ?? "").toLowerCase();
-    return bodyText.includes(tokenAddress.toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
 function capturedContext(pageUrl = location.href, explicitTradeId?: string): ShareContext | null {
   const tradeId = explicitTradeId ?? fomoTradeIdFromUrl(pageUrl);
   if (!tradeId) return null;
@@ -79,11 +71,20 @@ function capturedContext(pageUrl = location.href, explicitTradeId?: string): Sha
     }
   });
   if (!exact) return null;
+  const relatedPayloads = captures.flatMap((capture) => {
+    try {
+      return /^\/v2\/users\/[^/]+\/swaps$/.test(new URL(capture.url).pathname) ? [capture.payload] : [];
+    } catch {
+      return [];
+    }
+  });
   const baseContext = parseFomoTradeResponse(exact.payload, {
     tradeId,
     pageUrl,
     profileHandle: fomoHandleFromUrl(pageUrl),
     capturedAt: exact.capturedAt,
+    relatedPayloads,
+    relatedTradeGapSeconds: 3_600,
   });
   if (!baseContext?.tokenMint) return baseContext;
   const candleCaptures = [...captures].reverse().filter((capture) => {
@@ -96,32 +97,56 @@ function capturedContext(pageUrl = location.href, explicitTradeId?: string): Sha
       return false;
     }
   });
-  const matchingCapture = candleCaptures.find((capture) => isCandleCaptureForToken(capture, baseContext.tokenMint!));
-  const capturedCandles = parseFomoCandles(matchingCapture?.payload);
+  const capturedCandles = selectFomoCandlesForTrade(
+    candleCaptures,
+    baseContext.tradeExecutions ?? [],
+    baseContext.tokenMint,
+    baseContext.chainId,
+  );
   return ShareContextSchema.parse({ ...baseContext, capturedCandles });
 }
 
-function requestFocusedCandles(url: string, signal?: AbortSignal): Promise<FomoCapturedResponse | null> {
-  if (signal?.aborted) return Promise.resolve(null);
+function requestFocusedCandles(url: string, signal?: AbortSignal): Promise<FocusedCandleResult> {
+  if (signal?.aborted) return Promise.resolve({ capture: null, error: "Fomo capture aborted." });
   const requestId = crypto.randomUUID();
   return new Promise((resolve) => {
-    const finish = (capture: FomoCapturedResponse | null) => {
+    const finish = (result: FocusedCandleResult) => {
       const pending = pendingCandleRequests.get(requestId);
       if (!pending) return;
       clearTimeout(pending.timeout);
       pendingCandleRequests.delete(requestId);
       signal?.removeEventListener("abort", abort);
-      resolve(capture);
+      resolve(result);
     };
-    const abort = () => finish(null);
-    const timeout = setTimeout(() => finish(null), 8_000);
+    const abort = () => finish({ capture: null, error: "Fomo capture aborted." });
+    const timeout = setTimeout(() => finish({ capture: null, error: "Fomo candle request timed out." }), 6_000);
     pendingCandleRequests.set(requestId, { resolve: finish, timeout });
     signal?.addEventListener("abort", abort, { once: true });
     window.postMessage({ source: FOMO_BRIDGE_MESSAGE_SOURCE, type: "focused-candle-request", requestId, url }, location.origin);
   });
 }
 
-async function retrieveTradeContext(tradeId: string | null, pageUrl: string, signal?: AbortSignal): Promise<ShareContext> {
+function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Fomo capture aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delay);
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new DOMException("Fomo capture aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function retrieveTradeContext(
+  tradeId: string | null,
+  pageUrl: string,
+  signal?: AbortSignal,
+  onStatus?: (message: string) => void,
+): Promise<ShareContext> {
   if (!tradeId) throw new Error("Open a specific trade from this Fomo profile so the URL contains a tradeId, then open Wicklapse again.");
   window.dispatchEvent(new Event("wicklapse:fomo-snapshot-request"));
   const deadline = Date.now() + 12_000;
@@ -129,28 +154,47 @@ async function retrieveTradeContext(tradeId: string | null, pageUrl: string, sig
     const context = capturedContext(pageUrl, tradeId);
     if (context) {
       if (context.tokenMint && context.tradeExecutions?.length) {
-        const sessionCapture = [...captures].reverse().find((capture) => {
-          try {
-            const url = new URL(capture.url);
-            return url.origin === "https://fomo-api.mobula.io"
-              && url.pathname === "/api/2/token/ohlcv-history"
-              && isCandleCaptureForToken(capture, context.tokenMint!);
-          } catch {
-            return false;
+        const maxAttempts = 5;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          onStatus?.(`${attempt === 1 ? "Requesting" : "Retrying"} Fomo candles (${attempt}/${maxAttempts})…`);
+          if (attempt > 1) await waitForRetry([0, 2_000, 3_000, 4_000, 6_000][attempt - 1]!, signal);
+          window.dispatchEvent(new Event("wicklapse:fomo-snapshot-request"));
+          const sessionCapture = [...captures].reverse().find((capture) => {
+            try {
+              const url = new URL(capture.url);
+              return url.origin === "https://fomo-api.mobula.io"
+                && url.pathname === "/api/2/token/ohlcv-history"
+                && fomoCandleCaptureMatches(capture, context.tokenMint!, context.chainId);
+            } catch {
+              return false;
+            }
+          });
+          const chainId = context.tradeExecutions[0]?.chainId ?? context.chainId;
+          const syntheticTemplate = chainId
+            ? `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${encodeURIComponent(context.tokenMint)}&chainId=${encodeURIComponent(chainId)}&period=1m&usd=true&from=1&to=2&amount=1000`
+            : null;
+          const focusedUrl = focusedFomoCandleUrl(
+            sessionCapture?.url ?? syntheticTemplate ?? "",
+            context.tradeExecutions,
+            context.positionStatus === "open" ? Date.now() / 1_000 : undefined,
+          );
+          const focusedResult = focusedUrl
+            ? await requestFocusedCandles(focusedUrl, signal)
+            : { capture: null, error: "The Fomo candle URL could not be created." };
+          if (signal?.aborted) throw new DOMException("Fomo capture aborted", "AbortError");
+          const focusedCandles = focusedResult.capture
+            ? selectFomoCandlesForTrade([focusedResult.capture], context.tradeExecutions, context.tokenMint, context.chainId)
+            : [];
+          if (focusedCandles.length >= 2) {
+            const enriched = ShareContextSchema.parse({ ...context, capturedCandles: focusedCandles });
+            await saveShareContext(enriched);
+            return enriched;
           }
-        });
-        const focusedUrl = sessionCapture && focusedFomoCandleUrl(
-          sessionCapture.url,
-          context.tradeExecutions,
-          context.positionStatus === "open" ? Date.now() / 1_000 : undefined,
-        );
-        const focusedCapture = focusedUrl ? await requestFocusedCandles(focusedUrl, signal) : null;
-        const focusedCandles = parseFomoCandles(focusedCapture?.payload);
-        if (focusedCandles.length >= 2) {
-          const enriched = ShareContextSchema.parse({ ...context, capturedCandles: focusedCandles });
-          await saveShareContext(enriched);
-          return enriched;
+          if (attempt < maxAttempts && focusedResult.error) {
+            onStatus?.(`${focusedResult.error} Waiting before retry ${attempt + 1}/${maxAttempts}…`);
+          }
         }
+        onStatus?.("Fomo candles remained unavailable — trying the public fallback…");
       }
       await saveShareContext(context);
       return context;
@@ -213,7 +257,7 @@ export default defineContentScript({
       overlayTradeId = pinnedTradeId;
       overlayRoot?.render(React.createElement(InstantOverlay, {
         context,
-        resolveContext: (signal?: AbortSignal) => retrieveTradeContext(pinnedTradeId, pinnedPageUrl, signal),
+        resolveContext: (signal?: AbortSignal, _manualWallets?: string[], onStatus?: (message: string) => void) => retrieveTradeContext(pinnedTradeId, pinnedPageUrl, signal, onStatus),
         onClose: closeOverlay,
       }));
     };
@@ -226,9 +270,12 @@ export default defineContentScript({
         const pending = pendingCandleRequests.get(data.requestId);
         if (!pending) return;
         const capture = data.capture as Partial<FomoCapturedResponse> | undefined;
-        pending.resolve(capture && typeof capture.url === "string" && typeof capture.capturedAt === "number" && "payload" in capture
-          ? capture as FomoCapturedResponse
-          : null);
+        pending.resolve({
+          capture: capture && typeof capture.url === "string" && typeof capture.capturedAt === "number" && "payload" in capture
+            ? capture as FomoCapturedResponse
+            : null,
+          error: typeof data.error === "string" ? data.error : null,
+        });
         return;
       }
       if (data.type !== "capture") return;
@@ -263,7 +310,7 @@ export default defineContentScript({
       observer.disconnect();
       window.removeEventListener("message", handleWindowMessage);
       browser.runtime.onMessage.removeListener(handleRuntimeMessage);
-      for (const pending of pendingCandleRequests.values()) pending.resolve(null);
+      for (const pending of pendingCandleRequests.values()) pending.resolve({ capture: null, error: "Fomo page closed." });
       closeOverlay();
     });
   },

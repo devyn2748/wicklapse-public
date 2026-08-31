@@ -17,6 +17,14 @@ describe("Fomo focused candle bridge", () => {
     expect(safe?.toString()).not.toContain("synthetic-session-value");
   });
 
+  it("accepts equivalent numeric and canonical chain identifiers", () => {
+    const safe = validatedFocusedUrl(
+      `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${token}&chainId=8453&period=5s&from=1000&to=2000&amount=1000`,
+      template,
+    );
+    expect(safe?.searchParams.get("chainId")).toBe("evm:8453");
+  });
+
   it("rejects token changes, unsupported periods, and excessive candle counts", () => {
     const base = `https://fomo-api.mobula.io/api/2/token/ohlcv-history?chainId=evm%3A8453&from=1000&to=2000`;
     expect(validatedFocusedUrl(`${base}&address=0x2222222222222222222222222222222222222222&period=5s&amount=1000`, template)).toBeNull();

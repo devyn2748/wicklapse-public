@@ -90,4 +90,29 @@ describe("replay audio timing", () => {
     expect(replayEventOffset(buy, timedSpec, config)).toBeCloseTo(3, 8);
     expect(replayEventOffset(sell, timedSpec, config)).toBeCloseTo(7, 8);
   });
+
+  it("spreads an opening trade burst across a speedrun before compressing a long hold", () => {
+    const start = 1_000;
+    const end = start + 4 * 3_600;
+    const burstTimes = [start, start + 30, start + 60, start + 90, start + 120, start + 180, start + 240];
+    const speedrunFills = [
+      ...burstTimes.map((timestamp, index) => fill(`burst-${index}`, timestamp, index % 2 ? "sell" : "buy")),
+      fill("final-exit", end, "sell"),
+    ];
+    const speedrunSpec = {
+      ...spec,
+      points: speedrunFills.map((event, index) => ({ timestamp: event.timestamp, priceSol: "0.00001", pnlSol: String(index) })),
+      candles: [
+        { ...spec.candles![0]!, timestamp: start },
+        { ...spec.candles![0]!, timestamp: end - 60 },
+      ],
+      candleIntervalSeconds: 60,
+      episode: { ...spec.episode, startTimestamp: start, endTimestamp: end, fills: speedrunFills },
+    } as ReplaySpec;
+    const config = { duration: 8, width: 1920, height: 1080, speedrunMode: true };
+    const finalBurstOffset = replayEventOffset(speedrunFills[6]!, speedrunSpec, config);
+    expect(finalBurstOffset).toBeGreaterThan(3.5);
+    expect(finalBurstOffset).toBeLessThan(5.5);
+    expect(replayEventOffset(speedrunFills.at(-1)!, speedrunSpec, config)).toBeCloseTo(7.35, 4);
+  });
 });

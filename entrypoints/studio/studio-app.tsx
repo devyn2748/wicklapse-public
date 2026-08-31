@@ -24,7 +24,7 @@ import { selectAllowedIntervals } from "../../src/axiom-candles";
 import { buildProviderExecutionEpisodes } from "../../src/provider-capture";
 import { buildTradeEpisodes, selectCurrentTradeEpisode, solFromLamports } from "../../src/episodes";
 import { BUNDLED_SOUND_PRESETS, exportReplayVideo, playReplaySound, prepareReplaySound, replayEventOffset, replaySoundEvents, type SoundName } from "../../src/export-video";
-import { createReplaySpec, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
+import { createReplaySpec, geckoFallbackWarning, isAbortError, LatestReplayRequest, type CandleIntervalPreference } from "../../src/replay-project";
 import { drawReplayFrame, type ChartAnimation, type RenderConfig, type ThemeName, type WalletVisibility } from "../../src/renderer";
 import { ensureRpcPermission, findWalletTradeFills, testRpcConnection } from "../../src/rpc";
 import {
@@ -196,6 +196,7 @@ function PreviewCanvas({
       height: settings.height,
       chartLeadSeconds: settings.chartLeadSeconds,
       chartTrailSeconds: settings.chartTrailSeconds,
+      speedrunMode: settings.speedrunMode,
     };
     for (const fill of replaySoundEvents(spec)) {
       const at = replayEventOffset(fill, spec, timeline) / settings.duration;
@@ -205,7 +206,7 @@ function PreviewCanvas({
       const customBuffer = fill.side === "buy" ? buyCustomBuffer : sellCustomBuffer;
       void playReplaySound(audio, sound, fill.side, customBuffer);
     }
-  }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.height, settings.sellSound, settings.width, spec]);
+  }, [buyCustomBuffer, sellCustomBuffer, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.height, settings.sellSound, settings.speedrunMode, settings.width, spec]);
 
   const draw = useCallback(
     (nextProgress: number) => {
@@ -224,6 +225,7 @@ function PreviewCanvas({
           walletVisibility: settings.walletVisibility,
           chartMetric: settings.chartMetric,
           chartAnimation: settings.chartAnimation,
+          speedrunMode: settings.speedrunMode,
           chartLeadSeconds: settings.chartLeadSeconds,
           chartTrailSeconds: settings.chartTrailSeconds,
           showAverageBuyLine: settings.showAverageBuyLine,
@@ -428,6 +430,7 @@ export function StudioApp(): JSX.Element {
         setContext(project.shareContext);
         setMint(project.shareContext.tokenMint ?? "");
         setSpec(project.replaySpec);
+        setError(geckoFallbackWarning(project.replaySpec));
         const restoredEpisodes = project.shareContext.tradeExecutions?.length
           ? buildProviderExecutionEpisodes(project.shareContext)
           : [project.replaySpec.episode];
@@ -498,6 +501,7 @@ export function StudioApp(): JSX.Element {
       });
       if (!replayRequestRef.current.isLatest(request.id)) return false;
       setSpec(nextSpec);
+      setError(geckoFallbackWarning(nextSpec));
       await saveProject({ shareContext: context, replaySpec: nextSpec, selectedEpisodeId: nextSpec.episode.id });
       return true;
     } catch (caught) {
@@ -661,6 +665,7 @@ export function StudioApp(): JSX.Element {
       });
       if (!replayRequestRef.current.isLatest(request.id)) return;
       setSpec(nextSpec);
+      setError(geckoFallbackWarning(nextSpec));
       setStage("studio");
     } catch (caught) {
       if (isAbortError(caught) || !replayRequestRef.current.isLatest(request.id)) return;
@@ -682,6 +687,7 @@ export function StudioApp(): JSX.Element {
         walletVisibility: settings.walletVisibility,
         chartMetric: settings.chartMetric,
         chartAnimation: settings.chartAnimation,
+        speedrunMode: settings.speedrunMode,
         chartLeadSeconds: settings.chartLeadSeconds,
         chartTrailSeconds: settings.chartTrailSeconds,
         showAverageBuyLine: settings.showAverageBuyLine,
@@ -954,6 +960,7 @@ export function StudioApp(): JSX.Element {
 
           <aside className="advanced-inspector">
             <div className="inspector-heading"><div><span>MASTER CONFIG</span><h2>Composition & Export</h2></div><span className={spec.verified ? "verified" : "estimated"}>{spec.verified ? "Verified Data" : spec.tradeDataSource === "fomo" ? "Fomo Capture" : spec.tradeDataSource === "axiom" ? "Axiom Capture" : "Estimated"}</span></div>
+            {error && <div className="error-box" role="alert">{error}</div>}
 
             <section className="inspector-card" id="advanced-composition">
               <h3>▱ Composition setup</h3>
@@ -979,6 +986,7 @@ export function StudioApp(): JSX.Element {
               <div className="inspector-grid">
                 <div className="field-group"><span>Candle interval {candleBusy ? "· refreshing" : spec.candleIntervalSeconds ? `· using ${spec.candleIntervalSeconds < 60 ? `${spec.candleIntervalSeconds}s` : spec.candleIntervalSeconds < 3_600 ? `${spec.candleIntervalSeconds / 60}m` : `${spec.candleIntervalSeconds / 3_600}h`}` : ""}</span><Segmented value={displayedCandleInterval} options={[{ value: "auto", label: "Auto" }, ...allowedCandleIntervals.map((value) => ({ value, label: value }))]} onChange={(value) => void changeCandleInterval(value as CandleIntervalPreference)} /></div>
                 <label>Chart animation<select value={settings.chartAnimation} onChange={(event) => patchSettings("chartAnimation", event.target.value as ChartAnimation)}><option value="progressive">Progressive zoom (default)</option><option value="follow">Rolling follow</option><option value="fixed">Fixed full timeline</option></select></label>
+                <label className="check-row"><input type="checkbox" checked={settings.speedrunMode} onChange={(event) => patchSettings("speedrunMode", event.target.checked)} />Cinematic Speedrun</label>
                 <label>First buy at (video seconds)<input key={`lead-${settings.chartLeadSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartLeadSeconds ?? ""} placeholder="Auto (0.12s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartLeadSeconds", value); else event.currentTarget.value = settings.chartLeadSeconds == null ? "" : String(settings.chartLeadSeconds); }} /></label>
                 <label>Chart after final sell (seconds)<input key={`trail-${settings.chartTrailSeconds ?? "auto"}`} type="number" min={0} max={Math.max(0, settings.duration - 0.25)} step={0.25} defaultValue={settings.chartTrailSeconds ?? ""} placeholder="Auto (0.65s)" onBlur={(event) => { const raw = event.target.value.trim(); const value = raw === "" ? null : Number(raw); if (value === null || (Number.isFinite(value) && value >= 0)) void changeChartTiming("chartTrailSeconds", value); else event.currentTarget.value = settings.chartTrailSeconds == null ? "" : String(settings.chartTrailSeconds); }} /></label>
                 <div className="field-group"><span>Chart scale</span><Segmented value={settings.chartMetric} options={[{ value: "marketCap", label: spec.marketCapMultiplier ? "Market cap" : "MC unavailable" }, { value: "price", label: "Token price" }]} onChange={(value) => patchSettings("chartMetric", value)} /></div>
@@ -1030,7 +1038,6 @@ export function StudioApp(): JSX.Element {
               <h3>⇩ Export video</h3>
               <dl><div><dt>Resolution</dt><dd>{settings.width} × {settings.height}</dd></div><div><dt>Duration</dt><dd>{settings.duration}s</dd></div><div><dt>Format</dt><dd>MP4 / WebM fallback</dd></div></dl>
               {exportProgress !== null && <div className="export-progress"><div><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b></div><progress max={1} value={exportProgress} /></div>}
-              {error && <div className="error-box">{error}</div>}
               <button className="primary-button" type="button" disabled={exportProgress !== null} onClick={() => void exportVideo()}>{exportProgress !== null ? "Rendering…" : "Export Wicklapse Video"}</button>
               <button className="text-button" type="button" onClick={() => setStage(context ? "confirm" : "connect")}>Choose another trade</button>
             </section>

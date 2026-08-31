@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReplaySpec, TradeFill } from "./domain";
-import { chartReferenceLines, drawExecutionIndicators } from "./renderer";
+import { calculateSpeedrunProgressAtTimestamp, calculateSpeedrunReveal, chartReferenceLines, drawExecutionIndicators } from "./renderer";
 
 function fill(signature: string, side: "buy" | "sell", timestamp: number, amount: string, price: string): TradeFill {
   return {
@@ -52,6 +52,27 @@ describe("chartReferenceLines", () => {
 
   it("does not invent an ATH when Axiom did not provide one", () => {
     expect(chartReferenceLines({ ...spec, athMarketCapUsd: null }, { showAthLine: true })).toEqual([]);
+  });
+});
+
+describe("cinematic speedrun timing", () => {
+  const start = 1_000;
+  const end = start + 4 * 3_600;
+  const trades = [start, start + 30, start + 60, start + 90, start + 120, start + 180, start + 240, end];
+
+  it("expands a dense opening trade cluster and compresses the idle hold", () => {
+    const finalOpeningTrade = calculateSpeedrunProgressAtTimestamp(start + 240, start, end, trades, 60);
+    expect(finalOpeningTrade).toBeGreaterThan(0.5);
+    expect(finalOpeningTrade).toBeLessThan(0.75);
+    expect(calculateSpeedrunProgressAtTimestamp(end, start, end, trades, 60)).toBe(1);
+  });
+
+  it("keeps the forward and inverse activity mappings synchronized", () => {
+    for (const timestamp of trades) {
+      const videoProgress = calculateSpeedrunProgressAtTimestamp(timestamp, start, end, trades, 60);
+      const marketProgress = calculateSpeedrunReveal(videoProgress, start, end, trades, 60);
+      expect(start + marketProgress * (end - start)).toBeCloseTo(timestamp, 6);
+    }
   });
 });
 
@@ -145,9 +166,9 @@ describe("trade indicator visibility", () => {
   });
 
   it.each([
-    ["detailed", 3],
-    ["hype", 6],
-  ] as const)("applies the three-item queue to %s indicators", (style, expectedTextCalls) => {
+    ["detailed", 6],
+    ["hype", 2],
+  ] as const)("limits on-screen indicator text for the %s style", (style, expectedTextCalls) => {
     const queueFills = [120, 120.5, 121, 122].map((timestamp, index) => ({
       ...fill(`queue-${index}`, "sell", timestamp, "1", String(3 + index * 0.1)),
       quoteLamports: String((index + 1) * 1_000_000_000),
@@ -160,9 +181,22 @@ describe("trade indicator visibility", () => {
     const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
     expect(labels).toHaveLength(expectedTextCalls);
     if (style === "hype") {
-      expect(labels.filter((label) => label.startsWith("*SELLS "))).toHaveLength(3);
-      expect(labels.filter((label) => label.startsWith("("))).toHaveLength(3);
+      expect(labels.filter((label) => label.startsWith("SELLS "))).toHaveLength(labels.length / 2);
+      expect(labels.filter((label) => label.endsWith("%"))).toHaveLength(labels.length / 2);
     }
+  });
+
+  it("anchors a fill before the first candle to the nearest candle in candlestick mode", () => {
+    const early = { ...spec, episode: { ...spec.episode, fills: [fill("early", "buy", 90, "1", "0.1")] } } as ReplaySpec;
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, early, "feed", 0.5, {
+      duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null, chartStyle: "candlestick",
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    const arcYs = calls.filter((call) => call.method === "arc").map((call) => Number(call.args[1]));
+    expect(arcYs.length).toBeGreaterThan(0);
+    // yForPrice = 400 - price*20 -> raw 0.1 => 398 (floating); clamped low 0.9 => 382.
+    expect(arcYs.every((y) => Math.abs(y - 398) > 1)).toBe(true);
+    expect(arcYs.some((y) => Math.abs(y - 382) < 1)).toBe(true);
   });
 
   it("never inserts the coin name into Hype indicators", () => {
@@ -177,7 +211,8 @@ describe("trade indicator visibility", () => {
       duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
     }, 130, xForTime, yForPrice, plot, 1, theme);
     const labels = calls.filter((call) => call.method === "fillText").map((call) => String(call.args[0]));
-    expect(labels).toContain("(ENTRY)");
+    expect(labels.some((label) => label.startsWith("BUYS "))).toBe(true);
+    expect(labels.some((label) => label.includes("ENTRY"))).toBe(false);
     expect(labels.some((label) => label.includes("TESTCOIN"))).toBe(false);
   });
 

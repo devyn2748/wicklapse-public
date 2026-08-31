@@ -82,6 +82,8 @@ export const ShareContextSchema = z.object({
   axiomChartUrl: z.string().url().nullable().optional(),
   axiomPairContext: AxiomPairContextSchema.nullable().optional(),
   tradeExecutions: z.array(TradeExecutionSchema).max(5_000).optional(),
+  /** Executions belonging strictly to the trade ID opened by the user, before nearby Fomo trades are added. */
+  primaryTradeExecutions: z.array(TradeExecutionSchema).max(5_000).optional(),
   walletAddresses: z.array(SolanaAddressSchema).max(5_000).optional(),
   walletAddress: z.string().nullable(),
   walletLabel: z.string().max(80).nullable(),
@@ -95,6 +97,8 @@ export const ShareContextSchema = z.object({
   provider: z.enum(["axiom", "fomo"]).optional(),
   chainId: z.string().max(80).nullable().optional(),
   providerTradeId: z.string().max(160).nullable().optional(),
+  /** Provider-reported close time, used when a closed position has no priced exit event. */
+  providerClosedAt: z.number().positive().nullable().optional(),
   profileHandle: z.string().max(120).nullable().optional(),
   capturedCandles: z.array(ReplayCandleSchema).max(10_000).optional(),
 });

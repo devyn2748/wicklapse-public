@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { geckoNetworkForChainId } from "./chains";
 import type { ReplayCandle, ReplayPoint, ReplaySpec, ShareContext, TradeEpisode } from "./domain";
 import { buildReplayPoints } from "./episodes";
 import { fetchPublicMarketJson } from "./market-data";
@@ -12,6 +13,8 @@ import {
 
 export type { CandleIntervalPreference } from "./axiom-candles";
 
+export type ReplayStatusCallback = (message: string) => void;
+
 interface OhlcvPayload {
   data?: { attributes?: { ohlcv_list?: Array<[number, number, number, number, number, number]> } };
 }
@@ -24,6 +27,16 @@ interface PoolPayload {
       fdv_usd?: string | number | null;
     };
   };
+}
+
+interface TokenPoolsPayload {
+  data?: Array<{
+    id?: string;
+    attributes?: {
+      address?: string | null;
+      reserve_in_usd?: string | number | null;
+    };
+  }>;
 }
 
 interface MarketHistory {
@@ -86,6 +99,57 @@ export function selectCandleRequest(spanSeconds: number, preference: CandleInter
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+const TRANSIENT_MARKET_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function waitForMarketRetry(delay: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Market request aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delay);
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new DOMException("Market request aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function fetchMarketWithRetry(
+  url: string,
+  label: string,
+  signal?: AbortSignal,
+  onStatus?: ReplayStatusCallback,
+) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetchPublicMarketJson(url, {
+        headers: { accept: "application/json;version=20230203" },
+        signal,
+      });
+      if (response.ok || !TRANSIENT_MARKET_STATUSES.has(response.status) || attempt === maxAttempts) return response;
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      if (attempt === maxAttempts) throw error;
+    }
+    onStatus?.(`${label} — retrying (${attempt + 1}/${maxAttempts})…`);
+    await waitForMarketRetry(attempt === 1 ? 350 : 750, signal);
+  }
+  throw new Error("Market retry loop ended unexpectedly.");
+}
+
+export function geckoFallbackWarning(spec: Pick<ReplaySpec, "marketDataSource">): string {
+  if (spec.marketDataSource === "gecko") {
+    return "Primary candle data was unavailable. Wicklapse is using CoinGecko/GeckoTerminal fallback candles; verify the chart before exporting.";
+  }
+  if (spec.marketDataSource === "fills") {
+    return "No candle provider returned chart data. Wicklapse is showing execution points only; reload the Fomo trade and retry before exporting.";
+  }
+  return "";
 }
 
 export class LatestReplayRequest {
@@ -230,6 +294,7 @@ async function getMarketHistory(
   candleInterval: CandleIntervalPreference,
   signal?: AbortSignal,
   timeWindow?: CandleTimeWindow,
+  onStatus?: ReplayStatusCallback,
 ): Promise<MarketHistory | null> {
   if (!context.pairAddress) return null;
   const tradeSpan = Math.max(1, episode.endTimestamp - episode.startTimestamp);
@@ -260,6 +325,11 @@ async function getMarketHistory(
       if (isAbortError(error)) throw error;
     }
   }
+  const geckoNetwork = context.provider === "fomo" ? geckoNetworkForChainId(context.chainId) : "solana";
+  if (!geckoNetwork) return null;
+  onStatus?.("Primary candles unavailable — preparing the public fallback…");
+  const geckoPoolAddress = await resolveGeckoPoolAddress(context, geckoNetwork, signal, onStatus);
+  if (!geckoPoolAddress) return null;
   const preferredRequest = selectCandleRequest(spanSeconds, candleInterval);
   const preferredIndex = CANDLE_REQUESTS.indexOf(preferredRequest);
   const seenSources = new Set<string>();
@@ -270,19 +340,52 @@ async function getMarketHistory(
     return true;
   }).slice(0, 3);
   for (const request of requests) {
-    const result = await getMarketHistoryAtInterval(context.pairAddress, episode, spanSeconds, request, signal, timeWindow);
+    const result = await getMarketHistoryAtInterval(geckoNetwork, geckoPoolAddress, episode, spanSeconds, request, signal, timeWindow, onStatus);
     if (result) return result;
   }
   return null;
 }
 
+async function resolveGeckoPoolAddress(
+  context: ShareContext,
+  network: string,
+  signal?: AbortSignal,
+  onStatus?: ReplayStatusCallback,
+): Promise<string | null> {
+  if (context.provider !== "fomo") return context.pairAddress;
+  const tokenAddress = context.tokenMint ?? context.pairAddress;
+  if (!tokenAddress) return null;
+  try {
+    const response = await fetchMarketWithRetry(
+      `https://api.geckoterminal.com/api/v2/networks/${encodeURIComponent(network)}/tokens/${encodeURIComponent(tokenAddress)}/pools?page=1`,
+      "Finding a fallback candle pool",
+      signal,
+      onStatus,
+    );
+    if (!response.ok) return null;
+    const pools = (response.payload as TokenPoolsPayload).data ?? [];
+    const selected = [...pools].sort((left, right) => (
+      Number(right.attributes?.reserve_in_usd ?? 0) - Number(left.attributes?.reserve_in_usd ?? 0)
+    ))[0];
+    const address = selected?.attributes?.address?.trim();
+    if (address) return address;
+    const prefix = `${network}_`;
+    return selected?.id?.startsWith(prefix) ? selected.id.slice(prefix.length) : null;
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    return null;
+  }
+}
+
 async function getMarketHistoryAtInterval(
+  network: string,
   pairAddress: string,
   episode: TradeEpisode,
   spanSeconds: number,
   request: CandleRequest,
   signal?: AbortSignal,
   timeWindow?: CandleTimeWindow,
+  onStatus?: ReplayStatusCallback,
 ): Promise<MarketHistory | null> {
   const windowStart = timeWindow?.fromSeconds ?? episode.startTimestamp - request.interval;
   const windowEnd = timeWindow?.toSeconds ?? episode.endTimestamp + request.interval;
@@ -297,9 +400,11 @@ async function getMarketHistoryAtInterval(
     include_empty_intervals: "true",
   });
   try {
-    const response = await fetchPublicMarketJson(
-      `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pairAddress)}/ohlcv/${request.timeframe}?${params}`,
-      { headers: { accept: "application/json;version=20230203" }, signal },
+    const response = await fetchMarketWithRetry(
+      `https://api.geckoterminal.com/api/v2/networks/${encodeURIComponent(network)}/pools/${encodeURIComponent(pairAddress)}/ohlcv/${request.timeframe}?${params}`,
+      "Loading fallback candles",
+      signal,
+      onStatus,
     );
     if (!response.ok) return null;
     const payload = response.payload as OhlcvPayload;
@@ -333,6 +438,7 @@ export async function createReplaySpec(
   candleInterval: CandleIntervalPreference = "auto",
   signal?: AbortSignal,
   timelineOptions?: ReplayTimelineOptions,
+  onStatus?: ReplayStatusCallback,
 ): Promise<ReplaySpec> {
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");
   const fillPoints = buildReplayPoints(episode);
@@ -342,7 +448,7 @@ export async function createReplaySpec(
   const timeWindow = calculateReplayTimeWindow(episode, timelineOptions);
   const [usdPerSol, marketHistory, marketCapMultiplier] = await Promise.all([
     getUsdPerSol(signal),
-    getMarketHistory(context, episode, candleInterval, signal, timeWindow),
+    getMarketHistory(context, episode, candleInterval, signal, timeWindow, onStatus),
     getMarketCapMultiplier(context, signal),
   ]);
   if (signal?.aborted) throw new DOMException("Replay request aborted", "AbortError");

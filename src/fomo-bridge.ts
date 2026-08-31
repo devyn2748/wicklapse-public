@@ -1,3 +1,5 @@
+import { canonicalChainId } from "./chains";
+
 const BRIDGE_MESSAGE_SOURCE = "wicklapse-fomo-bridge";
 const BRIDGE_STATE_KEY = "__wicklapseFomoBridgeV2";
 const MOBULA_ORIGIN = "https://fomo-api.mobula.io";
@@ -19,7 +21,7 @@ interface BridgeState {
 function mobulaRequestKey(url: URL): string | null {
   if (url.origin !== MOBULA_ORIGIN || url.pathname !== MOBULA_PATH) return null;
   const address = url.searchParams.get("address")?.toLowerCase();
-  const chainId = url.searchParams.get("chainId")?.toLowerCase();
+  const chainId = canonicalChainId(url.searchParams.get("chainId"));
   return address && chainId ? `${address}|${chainId}` : null;
 }
 
@@ -60,6 +62,7 @@ function isRelevantFomoApiUrl(rawUrl: string): boolean {
     return url.pathname === "/proxy/getBarsNew"
       || url.pathname === "/proxy/getBars"
       || url.pathname.startsWith("/trades")
+      || /^\/v2\/users\/[^/]+\/swaps$/.test(url.pathname)
       || url.pathname.startsWith("/v2/users/userHandle/");
   } catch {
     return false;

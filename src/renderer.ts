@@ -210,6 +210,20 @@ function formatPrice(value: number): string {
   return value.toPrecision(4);
 }
 
+/** Round tick values (1/2/2.5/5 x 10^n steps) spanning the padded chart range. */
+function chartAxisTicks(minimum: number, maximum: number, targetCount = 4): number[] {
+  const span = maximum - minimum;
+  if (!Number.isFinite(span) || span <= 0) return [];
+  const magnitude = 10 ** Math.floor(Math.log10(span / targetCount));
+  const step = [1, 2, 2.5, 5, 10].map((multiple) => multiple * magnitude)
+    .find((candidate) => span / candidate <= targetCount + 0.5) ?? 10 * magnitude;
+  const ticks: number[] = [];
+  for (let value = Math.ceil(minimum / step) * step; value <= maximum + step * 1e-6; value += step) {
+    ticks.push(Math.abs(value) < step * 1e-6 ? 0 : value);
+  }
+  return ticks;
+}
+
 function currencyValue(value: Decimal, spec: ReplaySpec, currency: Currency): Decimal {
   const accountingCurrency = spec.accountingCurrency ?? "SOL";
   if (currency === accountingCurrency) return value;
@@ -380,6 +394,7 @@ export function replayEventVisualProgress(
   duration: number,
   leadSeconds?: number | null,
   trailSeconds?: number | null,
+  speedrunMode = false,
 ): number {
   const landscape = width / height >= 1.45;
   if ((leadSeconds != null || trailSeconds != null) && spec.chartStartTimestamp != null && spec.chartEndTimestamp != null) {
@@ -387,9 +402,6 @@ export function replayEventVisualProgress(
     return reveal;
   }
   const window = replayWindow(duration, landscape);
-  if (!landscape) {
-    return window.start + inverseReplayEase(eventProgress(fill, spec)) * (window.end - window.start);
-  }
   const points = [...spec.points].sort((left, right) => left.timestamp - right.timestamp);
   const candles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
   const interval = replayCandleInterval(spec);
@@ -398,6 +410,19 @@ export function replayEventVisualProgress(
     spec.episode.endTimestamp,
     candles.length ? candles.at(-1)!.timestamp + interval : points.at(-1)?.timestamp ?? spec.episode.endTimestamp,
   );
+  if (speedrunMode) {
+    const eventAt = calculateSpeedrunProgressAtTimestamp(
+      fill.timestamp,
+      chartStart,
+      chartEnd,
+      spec.episode.fills.map((candidate) => candidate.timestamp),
+      interval,
+    );
+    return window.start + eventAt * (window.end - window.start);
+  }
+  if (!landscape) {
+    return window.start + inverseReplayEase(eventProgress(fill, spec)) * (window.end - window.start);
+  }
   const reveal = clamp((fill.timestamp - chartStart) / Math.max(1, chartEnd - chartStart));
   return window.start + inverseReplayEase(reveal) * (window.end - window.start);
 }
@@ -495,7 +520,7 @@ export function drawExecutionIndicators(
   spec: ReplaySpec,
   style: TradeIndicatorStyle,
   videoProgress: number,
-  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds">,
+  config: Pick<RenderConfig, "duration" | "width" | "height" | "chartLeadSeconds" | "chartTrailSeconds" | "speedrunMode" | "chartStyle">,
   activeTimestamp: number,
   xForTime: (timestamp: number) => number,
   yForPrice: (price: number) => number,
@@ -503,10 +528,46 @@ export function drawExecutionIndicators(
   unit: number,
   theme: Theme,
 ): void {
+  const seriesCandles = [...(spec.candles ?? [])].sort((left, right) => left.timestamp - right.timestamp);
+  // Anchor markers to the drawn series. A fill's own estimated price can sit
+  // visibly off the chart, and sparse feeds (e.g. Mobula) can start the first
+  // candle well after the first buy. When no candle covers a fill, anchor it to
+  // the nearest candle rather than letting its raw price float off the axis.
+  const snapPriceToSeries = (timestamp: number, price: number): number => {
+    if (!seriesCandles.length) return price;
+    let previous = seriesCandles[0]!;
+    let next = seriesCandles[0]!;
+    for (const candle of seriesCandles) {
+      next = candle;
+      if (candle.timestamp > timestamp) break;
+      previous = candle;
+    }
+    if (config.chartStyle === "line" || config.chartStyle === "area") {
+      const previousClose = Number(previous.closeSol);
+      const nextClose = Number(next.closeSol);
+      if (!Number.isFinite(previousClose) || !Number.isFinite(nextClose)) return price;
+      // Before the first candle, after the last, or with only one candle:
+      // rest on the nearest close instead of interpolating past the edge.
+      if (timestamp <= previous.timestamp || next === previous) return previousClose;
+      const span = next.timestamp - previous.timestamp;
+      const ratio = span > 0 ? clamp((timestamp - previous.timestamp) / span) : 0;
+      return previousClose + (nextClose - previousClose) * ratio;
+    }
+    // Candlestick/bar: clamp the fill into the nearest candle's range, so a fill
+    // in a sparse gap or before the first candle rests on the nearest bar.
+    const nearest = Math.abs(timestamp - previous.timestamp) <= Math.abs(next.timestamp - timestamp) ? previous : next;
+    const low = Number(nearest.lowSol);
+    const high = Number(nearest.highSol);
+    if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) return price;
+    const anchor = Number.isFinite(price) && price > 0 ? price : Number(nearest.closeSol);
+    if (!Number.isFinite(anchor)) return price;
+    return Math.min(Math.max(anchor, low), high);
+  };
   const positioned: ExecutionPosition[] = [...spec.episode.fills]
     .sort((left, right) => left.timestamp - right.timestamp || left.slot - right.slot)
     .map((fill, index) => ({
-      fill, index, x: xForTime(fill.timestamp), y: yForPrice(Number(fill.estimatedPriceSol || 0)),
+      fill, index, x: xForTime(fill.timestamp),
+      y: yForPrice(snapPriceToSeries(fill.timestamp, Number(fill.estimatedPriceSol || 0))),
       ageMs: (activeTimestamp - fill.timestamp) * 1_000,
     }));
   const timed = positioned.map((entry) => {
@@ -518,6 +579,7 @@ export function drawExecutionIndicators(
       config.duration,
       config.chartLeadSeconds,
       config.chartTrailSeconds,
+      config.speedrunMode,
     );
     return { ...entry, eventAt, ageSeconds: (videoProgress - eventAt) * config.duration };
   }).sort((left, right) => left.eventAt - right.eventAt || left.index - right.index);
@@ -543,32 +605,49 @@ export function drawExecutionIndicators(
     return clamp(7 + scaled * 1.25, 7, 13) * unit;
   };
 
-  for (let index = 0; index < visibleQueue.length; index += 1) {
-    const entry = visibleQueue[index]!;
-    if (!isOnPlot(entry)) continue;
-    const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-    const radius = dotRadius(entry.fill);
-    const pulse = clamp(entry.ageMs / 620);
-    if (pulse < 1) {
+  if (style !== "detailed") {
+    // Dots are permanent chart markers: every fill keeps its dot once
+    // revealed. Only the text overlays are limited to the recent queue.
+    for (const entry of timed) {
+      if (entry.ageSeconds < 0) continue;
+      if (!isOnPlot(entry)) continue;
+      const isBuy = entry.fill.side === "buy";
+      const color = isBuy ? theme.positive : theme.negative;
+      // Buys are enlarged and carry a + glyph so entries read at a glance.
+      const radius = dotRadius(entry.fill) * (isBuy ? 1.7 : 1);
+      const pulse = clamp(entry.ageMs / 620);
+      if (pulse < 1) {
+        context.beginPath();
+        context.arc(entry.x, entry.y, radius + 20 * unit * pulse, 0, Math.PI * 2);
+        context.strokeStyle = `${color}${Math.round((1 - pulse) * 180).toString(16).padStart(2, "0")}`;
+        context.lineWidth = 3 * unit;
+        context.stroke();
+      }
+      context.save();
+      context.shadowColor = color;
+      context.shadowBlur = isBuy ? 20 * unit : 14 * unit;
       context.beginPath();
-      context.arc(entry.x, entry.y, radius + 20 * unit * pulse, 0, Math.PI * 2);
-      context.strokeStyle = `${color}${Math.round((1 - pulse) * 180).toString(16).padStart(2, "0")}`;
-      context.lineWidth = 3 * unit;
+      context.arc(entry.x, entry.y, radius, 0, Math.PI * 2);
+      context.fillStyle = color;
+      context.fill();
+      context.shadowBlur = 0;
+      context.lineWidth = Math.max(2 * unit, radius * 0.28);
+      context.strokeStyle = theme.panelStrong;
       context.stroke();
+      if (isBuy) {
+        const arm = radius * 0.5;
+        context.strokeStyle = theme.panelStrong;
+        context.lineCap = "round";
+        context.lineWidth = Math.max(2.5 * unit, radius * 0.3);
+        context.beginPath();
+        context.moveTo(entry.x - arm, entry.y);
+        context.lineTo(entry.x + arm, entry.y);
+        context.moveTo(entry.x, entry.y - arm);
+        context.lineTo(entry.x, entry.y + arm);
+        context.stroke();
+      }
+      context.restore();
     }
-    context.save();
-    context.globalAlpha = replacementOpacity(index, visibleQueue.length);
-    context.shadowColor = color;
-    context.shadowBlur = 14 * unit;
-    context.beginPath();
-    context.arc(entry.x, entry.y, radius, 0, Math.PI * 2);
-    context.fillStyle = color;
-    context.fill();
-    context.shadowBlur = 0;
-    context.lineWidth = Math.max(2 * unit, radius * 0.28);
-    context.strokeStyle = theme.panelStrong;
-    context.stroke();
-    context.restore();
   }
   if (style === "feed") {
     const lifetimeSeconds = 1.45;
@@ -632,94 +711,155 @@ export function drawExecutionIndicators(
   }
 
   if (style === "hype") {
-    const slotGap = 126 * unit;
+    // Oversized flat ticker, one fill at a time: uppercase mono with wide
+    // tracking in flat theme color — no outline, no glow — sitting in the
+    // upper chart area. The newest fill crossfades over the one it replaces.
+    const lifetime = 1.6;
+    const entranceSeconds = 0.14;
+    const activeAll = timed.filter((entry) => entry.ageSeconds >= 0);
+    const newest = activeAll.at(-1);
+    if (!newest) return;
+    const entrance = easeInOut(clamp(newest.ageSeconds / entranceSeconds));
     context.save();
     context.textAlign = "center";
     context.textBaseline = "middle";
-    for (let index = 0; index < visibleQueue.length; index += 1) {
-      const entry = visibleQueue[index]!;
-      const entrance = easeInOut(clamp(entry.ageSeconds / 0.12));
-      const naturalOpacity = entry.ageSeconds < 0.86 ? entrance : 1 - easeInOut(clamp((entry.ageSeconds - 0.86) / 0.49));
-      const opacity = naturalOpacity * replacementOpacity(index, visibleQueue.length);
-      const value = compactExecutionValue(entry.fill, spec);
+    (context as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${4 * unit}px`;
+    const centerX = plot.x + plot.width / 2;
+    const tickerY = plot.y + plot.height * 0.3;
+    const monoFont = (size: number) => `700 ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    const fitFont = (text: string, baseSize: number): number => {
+      context.font = monoFont(baseSize);
+      const width = context.measureText(text).width;
+      const maxWidth = plot.width * 0.94;
+      return width > maxWidth ? baseSize * (maxWidth / width) : baseSize;
+    };
+    // Every fill re-triggers a scale pop, so consecutive identical amounts
+    // still read as separate executions.
+    const drawTicker = (entry: (typeof activeAll)[number], alpha: number, pop: number) => {
+      if (alpha <= 0.01) return;
       const isBuy = entry.fill.side === "buy";
-      let topLine: string;
-      let bottomLine: string;
-      if (isBuy) {
-        topLine = `*BUYS ${value}*`;
-        const marketCap = Number(entry.fill.estimatedPriceSol) * Number(spec.marketCapMultiplier ?? 0);
-        bottomLine = Number.isFinite(marketCap) && marketCap > 0
-          ? `(${formatMarketCap(marketCap, "auto").replace(/^\$/, "")} MC)`
-          : "(ENTRY)";
-      } else {
+      const color = isBuy ? theme.positive : theme.negative;
+      const value = compactExecutionValue(entry.fill, spec).toUpperCase();
+      const line = `${isBuy ? "BUYS" : "SELLS"} ${value}`;
+      const fontSize = fitFont(line, 96 * unit);
+      const scale = 1 + 0.1 * (1 - pop);
+      context.save();
+      context.translate(centerX, tickerY);
+      context.scale(scale, scale);
+      context.globalAlpha = alpha * 0.88;
+      // Soft dark shadow so flat theme-colored text separates from bright
+      // candles without reintroducing the neon glow.
+      context.shadowColor = "rgba(0, 0, 0, 0.95)";
+      context.shadowBlur = 30 * unit;
+      context.shadowOffsetY = 4 * unit;
+      context.font = monoFont(fontSize);
+      context.fillStyle = color;
+      context.fillText(line, 0, 0);
+      if (!isBuy) {
         const sold = new Decimal(entry.fill.tokenAmountRaw || 0).abs();
         const remaining = new Decimal(entry.fill.walletPostTokenRaw || 0).abs();
         const total = sold.plus(remaining);
         const percentage = total.gt(0) ? sold.div(total).mul(100).toNumber() : 100;
-        const percentLabel = Number.isFinite(percentage) ? `${Math.max(0, Math.min(100, percentage)).toFixed(percentage < 10 ? 1 : 0)}%` : "SELL";
-        topLine = `*SELLS ${percentLabel}*`;
-        bottomLine = `(${value})`;
+        if (Number.isFinite(percentage)) {
+          const percentLabel = `${Math.max(0, Math.min(100, percentage)).toFixed(percentage < 10 ? 1 : 0)}%`;
+          context.globalAlpha = alpha * 0.7;
+          context.font = monoFont(Math.max(22 * unit, fontSize * 0.34));
+          context.fillText(percentLabel, 0, fontSize * 0.82);
+        }
       }
-      const centerX = plot.x + plot.width / 2;
-      const centerY = plot.y + plot.height / 2 + (index - (visibleQueue.length - 1) / 2) * slotGap;
-      const scale = 1.18 - entrance * 0.18;
-      context.save();
-      context.globalAlpha = opacity;
-      context.translate(centerX, centerY);
-      context.scale(scale, scale);
-      context.lineJoin = "round";
-      context.font = `1000 ${58 * unit}px ui-sans-serif, system-ui, sans-serif`;
-      context.lineWidth = 13 * unit;
-      context.strokeStyle = "rgba(0, 0, 0, .9)";
-      context.shadowColor = isBuy ? "#39ff14" : "#ff174f";
-      context.shadowBlur = 30 * unit;
-      context.strokeText(topLine, 0, -27 * unit);
-      context.fillStyle = isBuy ? "#39ff14" : "#ff174f";
-      context.fillText(topLine, 0, -27 * unit);
-      context.font = `1000 ${45 * unit}px ui-sans-serif, system-ui, sans-serif`;
-      context.lineWidth = 11 * unit;
-      context.strokeStyle = "rgba(0, 0, 0, .9)";
-      context.shadowColor = "#16d9ff";
-      context.shadowBlur = 26 * unit;
-      context.strokeText(bottomLine, 0, 34 * unit);
-      context.fillStyle = "#16d9ff";
-      context.fillText(bottomLine, 0, 34 * unit);
       context.restore();
+    };
+    // The replaced fill drops out while the newest pops in over it.
+    const previous = activeAll.at(-2);
+    if (previous && entrance < 1 && previous.ageSeconds <= lifetime) drawTicker(previous, 1 - entrance, 1);
+    if (newest.ageSeconds <= lifetime) {
+      const exit = newest.ageSeconds < lifetime - 0.35 ? 1 : 1 - easeInOut(clamp((newest.ageSeconds - (lifetime - 0.35)) / 0.35));
+      drawTicker(newest, entrance * exit, entrance);
     }
     context.restore();
     return;
   }
 
+  // Detailed style — price tick + hairline leader + bordered mono chip.
   const labels: Array<{ x: number; y: number; width: number; height: number }> = [];
   for (let index = 0; index < visibleQueue.length; index += 1) {
     const entry = visibleQueue[index]!;
+    if (!isOnPlot(entry)) continue;
+    const isBuy = entry.fill.side === "buy";
+    const color = isBuy ? theme.positive : theme.negative;
+    const dir = isBuy ? 1 : -1; // buy annotates below the fill, sell above
     context.save();
     context.globalAlpha = replacementOpacity(index, visibleQueue.length);
-    const color = entry.fill.side === "buy" ? theme.positive : theme.negative;
-    const label = `${entry.fill.side.toUpperCase()} ${compactExecutionValue(entry.fill, spec)}`;
-    context.font = `bold ${22 * unit}px ui-monospace, SFMono-Regular, monospace`;
-    const labelWidth = context.measureText(label).width + 32 * unit;
-    const labelHeight = 40 * unit;
-    const x = clamp(entry.x - labelWidth / 2, plot.x + 8 * unit, plot.x + plot.width - labelWidth - 8 * unit);
-    const baseY = entry.y + (entry.fill.side === "buy" ? -62 : 24) * unit;
-    const y = [0, -48, 48, -96, 96]
-      .map((offset) => clamp(baseY + offset * unit, plot.y + 4 * unit, plot.y + plot.height - labelHeight - 4 * unit))
-      .find((candidate) => !labels.some((placed) => x < placed.x + placed.width + 7 * unit
-        && x + labelWidth + 7 * unit > placed.x
-        && candidate < placed.y + placed.height + 6 * unit
-        && candidate + labelHeight + 6 * unit > placed.y)) ?? baseY;
-    labels.push({ x, y, width: labelWidth, height: labelHeight });
-    if (Math.abs(y - baseY) > 10 * unit) {
-      context.strokeStyle = `${color}aa`;
-      context.lineWidth = unit;
-      context.beginPath(); context.moveTo(entry.x, entry.y); context.lineTo(x + labelWidth / 2, y + labelHeight / 2); context.stroke();
+
+    // One-shot pulse ring on appearance
+    const pulse = clamp(entry.ageMs / 620);
+    if (pulse < 1) {
+      context.beginPath();
+      context.arc(entry.x, entry.y, 8 * unit + 26 * unit * pulse, 0, Math.PI * 2);
+      context.strokeStyle = `${color}${Math.round((1 - pulse) * 128).toString(16).padStart(2, "0")}`;
+      context.lineWidth = 2 * unit;
+      context.stroke();
     }
-    context.setLineDash([7 * unit, 7 * unit]);
-    context.strokeStyle = `${color}55`;
+
+    // Price tick — small triangle pointing at the fill
+    const tick = 9 * unit;
+    const tipY = entry.y + dir * 7 * unit;
+    context.fillStyle = color;
+    context.beginPath();
+    context.moveTo(entry.x, tipY);
+    context.lineTo(entry.x - tick, tipY + dir * tick * 1.6);
+    context.lineTo(entry.x + tick, tipY + dir * tick * 1.6);
+    context.closePath();
+    context.fill();
+
+    // Chip geometry
+    const label = `${isBuy ? "▲ BUY" : "▼ SELL"} ${compactExecutionValue(entry.fill, spec)}`;
+    const fontSize = 22 * unit;
+    context.font = `600 ${fontSize}px "JetBrains Mono", ui-monospace, SFMono-Regular, monospace`;
+    const paddingX = 16 * unit;
+    const chipWidth = context.measureText(label).width + paddingX * 2;
+    const chipHeight = 40 * unit;
+    const lead = 46 * unit;
+    const x = clamp(entry.x - chipWidth / 2, plot.x + 8 * unit, plot.x + plot.width - chipWidth - 8 * unit);
+    const baseY = dir === 1
+      ? tipY + tick * 1.6 + lead
+      : tipY - tick * 1.6 - lead - chipHeight;
+    const y = [0, dir * 48, dir * 96, -dir * 48]
+      .map((offset) => clamp(baseY + offset * unit, plot.y + 4 * unit, plot.y + plot.height - chipHeight - 4 * unit))
+      .find((candidate) => !labels.some((placed) => x < placed.x + placed.width + 7 * unit
+        && x + chipWidth + 7 * unit > placed.x
+        && candidate < placed.y + placed.height + 6 * unit
+        && candidate + chipHeight + 6 * unit > placed.y)) ?? baseY;
+    labels.push({ x, y, width: chipWidth, height: chipHeight });
+
+    // Leader — hairline from tick to chip edge
+    const leaderFrom = tipY + dir * tick * 1.6;
+    const leaderTo = dir === 1 ? y : y + chipHeight;
+    context.strokeStyle = `${color}73`;
     context.lineWidth = 1.5 * unit;
-    context.beginPath(); context.moveTo(entry.x, plot.y); context.lineTo(entry.x, plot.y + plot.height); context.stroke();
-    context.setLineDash([]);
-    drawPill(context, label, x, y, { fill: theme.panelStrong, stroke: `${color}dd`, color, fontSize: 22 * unit, paddingX: 16 * unit });
+    context.beginPath();
+    context.moveTo(entry.x, leaderFrom);
+    context.lineTo(entry.x, leaderTo);
+    // Dogleg to the chip center when clamping shifted it sideways
+    if (Math.abs(x + chipWidth / 2 - entry.x) > 12 * unit) {
+      context.lineTo(x + chipWidth / 2, leaderTo);
+    }
+    context.stroke();
+
+    // Chip — dark translucent fill, accent border at ~55%, two-tone mono text
+    roundedRect(context, x, y, chipWidth, chipHeight, chipHeight / 2);
+    context.fillStyle = theme.panelStrong;
+    context.fill();
+    context.strokeStyle = `${color}8c`;
+    context.lineWidth = 1.5 * unit;
+    context.stroke();
+    context.textBaseline = "middle";
+    const prefix = isBuy ? "▲ BUY " : "▼ SELL ";
+    context.fillStyle = color;
+    context.fillText(prefix, x + paddingX, y + chipHeight / 2 + 1);
+    context.fillStyle = theme.text;
+    context.fillText(label.slice(prefix.length), x + paddingX + context.measureText(prefix).width, y + chipHeight / 2 + 1);
+    context.textBaseline = "alphabetic";
     context.restore();
   }
 }
@@ -820,41 +960,68 @@ function drawBackground(
   context.stroke();
 }
 
-function calculateSpeedrunReveal(progress: number, startTimestamp: number, endTimestamp: number, trades: number[], interval: number): number {
-  if (trades.length === 0 || endTimestamp <= startTimestamp) return replayEase(progress);
-  
+interface SpeedrunTimeline {
+  anchors: number[];
+  cumulative: number[];
+  weights: number[];
+  totalWeight: number;
+}
+
+function buildSpeedrunTimeline(startTimestamp: number, endTimestamp: number, trades: number[], interval: number): SpeedrunTimeline | null {
+  if (endTimestamp <= startTimestamp) return null;
+  const activity = [...new Set(trades.filter((timestamp) => Number.isFinite(timestamp) && timestamp >= startTimestamp && timestamp <= endTimestamp))]
+    .sort((left, right) => left - right);
+  if (!activity.length) return null;
+  const anchors = [...new Set([startTimestamp, ...activity, endTimestamp])].sort((left, right) => left - right);
+  if (anchors.length < 2) return null;
   const span = endTimestamp - startTimestamp;
-  const segments = 200;
-  const step = span / segments;
-  const hotZoneRadius = Math.max(interval * 2, span * 0.05); // +/- 5% of timeline or 2 candles
-
-  const weights = new Float64Array(segments);
-  let totalWeight = 0;
-
-  for (let i = 0; i < segments; i++) {
-    const t = startTimestamp + i * step;
-    let inHotZone = false;
-    for (const trade of trades) {
-      if (Math.abs(t - trade) <= hotZoneRadius) {
-        inHotZone = true;
-        break;
-      }
-    }
-    const weight = inHotZone ? 6.0 : 1.0; // 6x slower in hot zones
-    weights[i] = weight;
-    totalWeight += weight;
+  const activityGap = Math.max(1, interval * 2, span / 1_000);
+  const firstTrade = activity[0]!;
+  const lastTrade = activity.at(-1)!;
+  const weights: number[] = [];
+  const cumulative = [0];
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const left = anchors[index]!;
+    const right = anchors[index + 1]!;
+    const gap = Math.max(0.001, right - left);
+    const ratio = gap / activityGap;
+    let weight = ratio <= 1 ? 1 : Math.min(4, 1 + Math.log2(ratio));
+    if (right <= firstTrade || left >= lastTrade) weight = Math.min(0.3, weight);
+    weights.push(weight);
+    cumulative.push(cumulative.at(-1)! + weight);
   }
+  return { anchors, cumulative, weights, totalWeight: cumulative.at(-1)! };
+}
 
-  const targetWeight = progress * totalWeight;
-  let accumulated = 0;
-
-  for (let i = 0; i < segments; i++) {
-    const nextAccumulated = accumulated + weights[i]!;
-    if (nextAccumulated >= targetWeight) {
-      const fraction = (targetWeight - accumulated) / weights[i]!;
-      return (i + fraction) / segments;
+/** Converts video progress into market-time progress while expanding dense execution clusters. */
+export function calculateSpeedrunReveal(progress: number, startTimestamp: number, endTimestamp: number, trades: number[], interval: number): number {
+  const timeline = buildSpeedrunTimeline(startTimestamp, endTimestamp, trades, interval);
+  if (!timeline) return replayEase(progress);
+  const targetWeight = clamp(progress) * timeline.totalWeight;
+  for (let index = 0; index < timeline.weights.length; index += 1) {
+    const next = timeline.cumulative[index + 1]!;
+    if (targetWeight <= next) {
+      const local = (targetWeight - timeline.cumulative[index]!) / timeline.weights[index]!;
+      const timestamp = timeline.anchors[index]! + (timeline.anchors[index + 1]! - timeline.anchors[index]!) * local;
+      return clamp((timestamp - startTimestamp) / (endTimestamp - startTimestamp));
     }
-    accumulated = nextAccumulated;
+  }
+  return 1;
+}
+
+/** Inverse speedrun mapping used to synchronize indicators and audio with the chart. */
+export function calculateSpeedrunProgressAtTimestamp(timestamp: number, startTimestamp: number, endTimestamp: number, trades: number[], interval: number): number {
+  const timeline = buildSpeedrunTimeline(startTimestamp, endTimestamp, trades, interval);
+  if (!timeline) return inverseReplayEase(clamp((timestamp - startTimestamp) / Math.max(1, endTimestamp - startTimestamp)));
+  if (timestamp <= startTimestamp) return 0;
+  if (timestamp >= endTimestamp) return 1;
+  for (let index = 0; index < timeline.weights.length; index += 1) {
+    const left = timeline.anchors[index]!;
+    const right = timeline.anchors[index + 1]!;
+    if (timestamp <= right) {
+      const local = clamp((timestamp - left) / Math.max(0.001, right - left));
+      return clamp((timeline.cumulative[index]! + timeline.weights[index]! * local) / timeline.totalWeight);
+    }
   }
   return 1;
 }
@@ -1021,13 +1188,16 @@ function drawLandscapeReplayFrame(
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
+  // Prices and market caps are never negative, so range padding must not
+  // drag the axis below zero.
+  const rangeFloor = minimum >= 0 ? 0 : Number.NEGATIVE_INFINITY;
   if (minimum === maximum) {
     const padding = Math.max(0.000001, Math.abs(minimum) * 0.08);
-    minimum -= padding;
+    minimum = Math.max(rangeFloor, minimum - padding);
     maximum += padding;
   } else {
     const padding = (maximum - minimum) * 0.08;
-    minimum -= padding;
+    minimum = Math.max(rangeFloor, minimum - padding);
     maximum += padding;
   }
 
@@ -1049,8 +1219,10 @@ function drawLandscapeReplayFrame(
     const x = plotX + plotWidth * index / 6;
     context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
   }
-  for (let index = 0; index <= 4; index += 1) {
-    const y = plotY + plotHeight * index / 4;
+  const axisTicks = chartAxisTicks(minimum, maximum);
+  const yForChartValue = (value: number) => plotY + (1 - clamp((value - minimum) / (maximum - minimum))) * plotHeight;
+  for (const tick of axisTicks) {
+    const y = yForChartValue(tick);
     context.beginPath(); context.moveTo(plotX, y); context.lineTo(plotX + plotWidth, y); context.stroke();
   }
 
@@ -1202,14 +1374,13 @@ function drawLandscapeReplayFrame(
   context.textAlign = "right";
   context.fillStyle = theme.muted;
   context.font = `bold ${26 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  for (let index = 0; index < 3; index += 1) {
-    const ratio = index / 2;
-    const value = maximum - (maximum - minimum) * ratio;
-    context.fillText(
-      showMarketCap ? formatMarketCap(value, config.marketCapFormat ?? "auto", config.marketCapThreshold) : formatPrice(value),
-      chartX + chartWidth - 10 * unit,
-      plotY + ratio * (plotHeight - 8 * unit),
-    );
+  for (const tick of axisTicks) {
+    const y = yForChartValue(tick);
+    if (y < plotY + 34 * unit || y > plotY + plotHeight - 10 * unit) continue;
+    const label = tick === 0
+      ? (showMarketCap ? "$0" : "0")
+      : showMarketCap ? formatMarketCap(tick, config.marketCapFormat ?? "auto", config.marketCapThreshold) : formatPrice(tick);
+    context.fillText(label, chartX + chartWidth - 10 * unit, y - 8 * unit);
   }
   context.textAlign = "left";
   if (config.affiliateLink) {
@@ -1377,13 +1548,16 @@ function drawPortraitReplayFrame(
   let minimum = Math.min(...priceValues.filter(Number.isFinite));
   let maximum = Math.max(...priceValues.filter(Number.isFinite));
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) minimum = maximum = 0;
+  // Prices and market caps are never negative, so range padding must not
+  // drag the axis below zero.
+  const rangeFloor = minimum >= 0 ? 0 : Number.NEGATIVE_INFINITY;
   if (minimum === maximum) {
     const padding = Math.max(0.000001, Math.abs(minimum) * 0.08);
-    minimum -= padding;
+    minimum = Math.max(rangeFloor, minimum - padding);
     maximum += padding;
   } else {
     const padding = (maximum - minimum) * 0.08;
-    minimum -= padding;
+    minimum = Math.max(rangeFloor, minimum - padding);
     maximum += padding;
   }
 
@@ -1405,8 +1579,10 @@ function drawPortraitReplayFrame(
     const x = plotX + plotWidth * index / 6;
     context.beginPath(); context.moveTo(x, plotY); context.lineTo(x, plotY + plotHeight); context.stroke();
   }
-  for (let index = 0; index <= 4; index += 1) {
-    const y = plotY + plotHeight * index / 4;
+  const axisTicks = chartAxisTicks(minimum, maximum);
+  const yForChartValue = (value: number) => plotY + (1 - clamp((value - minimum) / (maximum - minimum))) * plotHeight;
+  for (const tick of axisTicks) {
+    const y = yForChartValue(tick);
     context.beginPath(); context.moveTo(plotX, y); context.lineTo(plotX + plotWidth, y); context.stroke();
   }
 
@@ -1558,14 +1734,13 @@ function drawPortraitReplayFrame(
   context.textAlign = "right";
   context.fillStyle = theme.muted;
   context.font = `bold ${26 * unit}px ui-monospace, SFMono-Regular, monospace`;
-  for (let index = 0; index < 3; index += 1) {
-    const ratio = index / 2;
-    const value = maximum - (maximum - minimum) * ratio;
-    context.fillText(
-      showMarketCap ? formatMarketCap(value, config.marketCapFormat ?? "auto", config.marketCapThreshold) : formatPrice(value),
-      chartX + chartWidth - 10 * unit,
-      plotY + ratio * (plotHeight - 8 * unit),
-    );
+  for (const tick of axisTicks) {
+    const y = yForChartValue(tick);
+    if (y < plotY + 34 * unit || y > plotY + plotHeight - 10 * unit) continue;
+    const label = tick === 0
+      ? (showMarketCap ? "$0" : "0")
+      : showMarketCap ? formatMarketCap(tick, config.marketCapFormat ?? "auto", config.marketCapThreshold) : formatPrice(tick);
+    context.fillText(label, chartX + chartWidth - 10 * unit, y - 8 * unit);
   }
   context.textAlign = "left";
   if (config.affiliateLink) {
