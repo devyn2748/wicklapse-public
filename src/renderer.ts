@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import type { Currency, ReplayPoint, ReplaySpec, TradeFill } from "./domain";
 
 export type ThemeName = "obsidian" | "neon" | "minimal" | "cyberpunk" | "sunset" | "matrix" | "hacker";
-export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene";
+export type BackgroundStyle = "glow" | "solid" | "grid" | "particles" | "aurora" | "cyberpunk-scene" | "starlit-lake" | "neon-tokyo";
 export type WalletVisibility = "hidden" | "short" | "full";
 export type ChartAnimation = "progressive" | "follow" | "fixed";
 export type TradeIndicatorStyle = "detailed" | "feed" | "hype";
