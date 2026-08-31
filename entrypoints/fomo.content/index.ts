@@ -218,6 +218,49 @@ export default defineContentScript({
     let activeUrl = location.href;
     let overlayTradeId: string | null = null;
 
+    const activeFomoDialog = (): HTMLElement | null => Array.from(
+      document.querySelectorAll<HTMLElement>('[role="dialog"], [data-radix-dialog-content]'),
+    ).filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return element.isConnected && rect.width > 0 && rect.height > 0;
+    }).at(-1) ?? null;
+
+    const attachOverlayToDialog = () => {
+      if (!overlayHost) return;
+      // Fomo's Radix FocusScope rejects focus outside its active dialog. The
+      // overlay must be a real descendant—not merely visually above it—for
+      // text inputs to retain focus. Fall back to the document only while the
+      // trade dialog is between renders.
+      const parent = activeFomoDialog() ?? document.documentElement;
+      if (overlayHost.parentElement !== parent) parent.append(overlayHost);
+      if (parent === document.documentElement) {
+        Object.assign(overlayHost.style, {
+          position: "fixed",
+          inset: "0",
+          left: "",
+          top: "",
+          width: "",
+          height: "",
+          transform: "",
+        });
+        return;
+      }
+
+      // Keep the host inside Fomo's focus scope, but counter-position it to
+      // the viewport so the overlay remains docked at the right edge instead
+      // of being constrained to (and covering) the trade dialog.
+      const rect = parent.getBoundingClientRect();
+      Object.assign(overlayHost.style, {
+        position: "absolute",
+        inset: "auto",
+        left: `${-rect.left}px`,
+        top: `${-rect.top}px`,
+        width: `${window.innerWidth}px`,
+        height: `${window.innerHeight}px`,
+        transform: "translateZ(0)",
+      });
+    };
+
     const closeOverlay = () => {
       overlayRoot?.unmount();
       overlayHost?.remove();
@@ -240,11 +283,15 @@ export default defineContentScript({
           zIndex: "2147483647",
           pointerEvents: "none",
         });
-        document.documentElement.append(overlayHost);
-        // Fomo's Radix dialog defers outside dismissal until later pointer/mouse
-        // events. Keeping those events inside this host lets every Wicklapse
-        // control work without dismissing the trade dialog behind it.
-        for (const eventName of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "touchstart", "touchend"]) {
+        attachOverlayToDialog();
+        // Keep Fomo's deferred dialog dismissal and global keyboard handlers
+        // from receiving pointer or typing events originating in Wicklapse.
+        for (const eventName of [
+          "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "touchstart", "touchend",
+          "wheel", "scroll",
+          "keydown", "keyup", "keypress", "beforeinput", "input", "change", "paste", "cut",
+          "compositionstart", "compositionupdate", "compositionend",
+        ]) {
           overlayHost.addEventListener(eventName, (event) => event.stopPropagation());
         }
         const shadow = overlayHost.attachShadow({ mode: "open" });
@@ -284,9 +331,13 @@ export default defineContentScript({
       retainCapture(capture as FomoCapturedResponse);
     };
     window.addEventListener("message", handleWindowMessage);
+    window.addEventListener("resize", attachOverlayToDialog);
     window.dispatchEvent(new Event("wicklapse:fomo-snapshot-request"));
 
     const observer = new MutationObserver(() => {
+      // Fomo may reconcile away DOM children it did not create. Reattach the
+      // same host node so React state and in-progress control values survive.
+      attachOverlayToDialog();
       if (location.href === activeUrl) return;
       activeUrl = location.href;
       const nextTradeId = fomoTradeIdFromUrl(activeUrl);
@@ -309,6 +360,7 @@ export default defineContentScript({
     ctx.onInvalidated(() => {
       observer.disconnect();
       window.removeEventListener("message", handleWindowMessage);
+      window.removeEventListener("resize", attachOverlayToDialog);
       browser.runtime.onMessage.removeListener(handleRuntimeMessage);
       for (const pending of pendingCandleRequests.values()) pending.resolve({ capture: null, error: "Fomo page closed." });
       closeOverlay();

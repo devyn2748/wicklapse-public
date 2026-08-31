@@ -281,6 +281,12 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     }
   }, [context, resolveContext]);
 
+  // Load persisted settings exactly once on mount. This must NOT re-run on
+  // re-render: the overlay is re-rendered imperatively (openInstant passes a
+  // fresh resolveContext each time), which changes buildCapturedReplay's
+  // identity. Re-running setSettings here would overwrite whatever the user is
+  // currently typing - e.g. the affiliate handle - which made that field
+  // intermittently uneditable.
   useEffect(() => {
     let active = true;
     void loadStudioSettings()
@@ -294,6 +300,19 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
           aspectRatio: savedSettings.aspectRatio ?? "16:9",
         });
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // (Re)build the replay whenever the trade context changes. Reads settings for
+  // the initial candle window but never writes them, so it cannot clobber edits.
+  useEffect(() => {
+    let active = true;
+    void loadStudioSettings()
+      .then((savedSettings) => {
+        if (!active) return;
         void buildCapturedReplay(savedSettings.candleInterval ?? "auto", {
           duration: savedSettings.duration,
           leadSeconds: savedSettings.chartLeadSeconds,
@@ -469,7 +488,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
             <label className="wick-check"><input type="checkbox" checked={settings.showAverageSellLine} onChange={(event) => patch("showAverageSellLine", event.target.checked)} /><span><b>Average Sell</b><small>Updates after every partial or full sell</small></span></label>
             <label className="wick-check"><input type="checkbox" checked={settings.showAthLine} disabled={!spec.athMarketCapUsd} onChange={(event) => patch("showAthLine", event.target.checked)} /><span><b>Coin ATH</b><small>{spec.athMarketCapUsd ? "Line when reached in-clip; otherwise top badge" : "True ATH unavailable from this provider"}</small></span></label>
           </div></section>
-          <section className="wick-side-section"><div className="wick-section-title"><h3>Affiliate / X Handle</h3><span>Optional</span></div><label>Link or @handle<input type="text" value={settings.affiliateLink} onChange={(event) => patch("affiliateLink", event.target.value)} placeholder="e.g. @username or t.me/link" maxLength={40} /></label></section>
+          <section className="wick-side-section"><div className="wick-section-title"><h3>Affiliate / X Handle</h3><span>Optional</span></div><label>Link or @handle<input type="text" value={settings.affiliateLink} onChange={(event) => patch("affiliateLink", event.currentTarget.value)} onKeyDown={(event) => event.stopPropagation()} onKeyUp={(event) => event.stopPropagation()} placeholder="e.g. @username or t.me/link" maxLength={40} autoComplete="off" spellCheck={false} /></label></section>
           <section className="wick-side-section"><div className="wick-section-title"><h3>Custom clip length</h3><span>1–60 seconds</span></div><label>Video duration<input key={`instant-duration-${settings.duration}`} type="number" min={1} max={60} step={0.25} defaultValue={settings.duration} onBlur={(event) => { const input = event.currentTarget; const value = Number(input.value); if (Number.isFinite(value) && value >= 1 && value <= 60 && value !== settings.duration) void changeDuration(value).then((changed) => { if (!changed) input.value = String(settings.duration); }); else input.value = String(settings.duration); }} /></label></section>
         </div>
         <div className="wick-side-footer">Changes restart the preview automatically.</div>

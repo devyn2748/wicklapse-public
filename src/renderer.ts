@@ -712,8 +712,8 @@ export function drawExecutionIndicators(
 
   if (style === "hype") {
     // Oversized flat ticker, one fill at a time: uppercase mono with wide
-    // tracking in flat theme color — no outline, no glow — sitting in the
-    // upper chart area. The newest fill crossfades over the one it replaces.
+    // tracking in flat theme color — no outline or neon glow — centered over
+    // the full card. The newest fill crossfades over the one it replaces.
     const lifetime = 1.6;
     const entranceSeconds = 0.14;
     const activeAll = timed.filter((entry) => entry.ageSeconds >= 0);
@@ -724,8 +724,10 @@ export function drawExecutionIndicators(
     context.textAlign = "center";
     context.textBaseline = "middle";
     (context as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${4 * unit}px`;
-    const centerX = plot.x + plot.width / 2;
-    const tickerY = plot.y + plot.height * 0.3;
+    // This treatment is an editorial overlay, so anchor it to the full card
+    // rather than the chart plot (which is offset in the landscape layout).
+    const centerX = config.width / 2;
+    const tickerY = config.height / 2;
     const monoFont = (size: number) => `700 ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     const fitFont = (text: string, baseSize: number): number => {
       context.font = monoFont(baseSize);
@@ -733,7 +735,7 @@ export function drawExecutionIndicators(
       const maxWidth = plot.width * 0.94;
       return width > maxWidth ? baseSize * (maxWidth / width) : baseSize;
     };
-    // Every fill re-triggers a scale pop, so consecutive identical amounts
+    // Every fill re-triggers the scale-in, so consecutive identical amounts
     // still read as separate executions.
     const drawTicker = (entry: (typeof activeAll)[number], alpha: number, pop: number) => {
       if (alpha <= 0.01) return;
@@ -742,16 +744,19 @@ export function drawExecutionIndicators(
       const value = compactExecutionValue(entry.fill, spec).toUpperCase();
       const line = `${isBuy ? "BUYS" : "SELLS"} ${value}`;
       const fontSize = fitFont(line, 96 * unit);
-      const scale = 1 + 0.1 * (1 - pop);
+      // Fast, restrained scale-in: begin slightly undersized and settle at
+      // the final size alongside the existing entrance crossfade.
+      const scale = 0.86 + 0.14 * pop;
       context.save();
       context.translate(centerX, tickerY);
       context.scale(scale, scale);
       context.globalAlpha = alpha * 0.88;
-      // Soft dark shadow so flat theme-colored text separates from bright
-      // candles without reintroducing the neon glow.
-      context.shadowColor = "rgba(0, 0, 0, 0.95)";
-      context.shadowBlur = 30 * unit;
-      context.shadowOffsetY = 4 * unit;
+      // A deeper dark shadow keeps the flat theme-colored text legible over
+      // dense candles and bright custom backdrops without adding neon glow.
+      context.shadowColor = "rgba(0, 0, 0, 1)";
+      context.shadowBlur = 48 * unit;
+      context.shadowOffsetX = 0;
+      context.shadowOffsetY = 8 * unit;
       context.font = monoFont(fontSize);
       context.fillStyle = color;
       context.fillText(line, 0, 0);

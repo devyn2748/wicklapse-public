@@ -358,6 +358,15 @@ export default defineContentScript({
         overlayHost = document.createElement("div");
         overlayHost.dataset.wicklapseOverlay = "true";
         overlayHost.dataset.html2canvasIgnore = "true";
+        // Keep host-page hotkeys and dialog handlers from consuming text typed
+        // into Wicklapse controls such as the affiliate/handle field.
+        for (const eventName of [
+          "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "touchstart", "touchend",
+          "keydown", "keyup", "keypress", "beforeinput", "input", "change", "paste", "cut",
+          "compositionstart", "compositionupdate", "compositionend",
+        ]) {
+          overlayHost.addEventListener(eventName, (event) => event.stopPropagation());
+        }
         document.documentElement.append(overlayHost);
         const shadow = overlayHost.attachShadow({ mode: "open" });
         const style = document.createElement("style");

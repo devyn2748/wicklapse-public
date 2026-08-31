@@ -1,6 +1,6 @@
 {
   "name": "wicklapse-extension",
-  "version": "0.10.24",
+  "version": "0.10.37",
   "description": "A local-first Chrome extension for turning Axiom and Fomo trades into animated replay videos.",
   "license": "MIT",
   "private": true,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReplaySpec, TradeFill } from "./domain";
-import { calculateSpeedrunProgressAtTimestamp, calculateSpeedrunReveal, chartReferenceLines, drawExecutionIndicators } from "./renderer";
+import { calculateSpeedrunProgressAtTimestamp, calculateSpeedrunReveal, chartReferenceLines, drawExecutionIndicators, replayEventVisualProgress } from "./renderer";
 
 function fill(signature: string, side: "buy" | "sell", timestamp: number, amount: string, price: string): TradeFill {
   return {
@@ -214,6 +214,40 @@ describe("trade indicator visibility", () => {
     expect(labels.some((label) => label.startsWith("BUYS "))).toBe(true);
     expect(labels.some((label) => label.includes("ENTRY"))).toBe(false);
     expect(labels.some((label) => label.includes("TESTCOIN"))).toBe(false);
+  });
+
+  it.each([
+    [1920, 1080],
+    [1080, 1920],
+  ])("centers Hype text on the %sx%s card with a stronger shadow", (width, height) => {
+    const { context, calls } = recordedContext();
+    drawExecutionIndicators(context, spec, "hype", 0.45, {
+      duration: 8, width, height, chartLeadSeconds: 0, chartTrailSeconds: null,
+    }, 130, xForTime, yForPrice, plot, 1, theme);
+    const translations = calls.filter((call) => call.method === "translate");
+    expect(translations.some((call) => call.args[0] === width / 2 && call.args[1] === height / 2)).toBe(true);
+    expect(calls.some((call) => call.method === "set:shadowBlur" && call.args[0] === 48)).toBe(true);
+    expect(calls.some((call) => call.method === "set:shadowOffsetY" && call.args[0] === 8)).toBe(true);
+  });
+
+  it("scales Hype text up from a subtle smaller entrance size", () => {
+    const entranceSpec = {
+      ...spec,
+      episode: { ...spec.episode, fills: [fill("hype-scale", "buy", 120, "1", "3")] },
+    } as ReplaySpec;
+    const renderScale = (ageSeconds: number) => {
+      const { context, calls } = recordedContext();
+      const eventAt = replayEventVisualProgress(entranceSpec.episode.fills[0]!, entranceSpec, 1920, 1080, 8, 0, null, false);
+      drawExecutionIndicators(context, entranceSpec, "hype", eventAt + ageSeconds / 8, {
+        duration: 8, width: 1920, height: 1080, chartLeadSeconds: 0, chartTrailSeconds: null,
+      }, 120 + ageSeconds, xForTime, yForPrice, plot, 1, theme);
+      return Number(calls.find((call) => call.method === "scale")?.args[0]);
+    };
+    const enteringScale = renderScale(0.02);
+    const settledScale = renderScale(0.2);
+    expect(enteringScale).toBeGreaterThanOrEqual(0.86);
+    expect(enteringScale).toBeLessThan(1);
+    expect(settledScale).toBe(1);
   });
 
 });
