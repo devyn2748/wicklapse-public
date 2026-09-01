@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type JSX } from "react";
 import { browser } from "wxt/browser";
 import { normalizeWalletAddresses } from "./axiom-api";
-import { BUNDLED_BACKDROPS, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "./backdrops";
+import { BUNDLED_BACKDROPS, createCustomVideoBackdrop, disposeBundledBackdrop, isBundledVideoBackdrop, isVideoBackdrop, loadBundledBackdrop, type BundledBackdropMedia } from "./backdrops";
 import { type ReplaySpec, type ShareContext } from "./domain";
 import { selectCurrentTradeEpisode } from "./episodes";
 import { buildProviderExecutionEpisodes } from "./provider-capture";
@@ -37,7 +37,15 @@ interface RelatedTradeChoice {
   combinedExecutions: number;
 }
 
-function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: BundledBackdropMedia | null }): JSX.Element {
+export interface CustomSound { id: string; name: string; buffer: AudioBuffer }
+
+/** One uploaded sound is usable by both sides, so look it up in the shared pool. */
+function customSoundBuffer(sound: SoundName, pool: CustomSound[]): AudioBuffer | null {
+  if (!sound.startsWith("custom:")) return null;
+  return pool.find((entry) => `custom:${entry.id}` === sound)?.buffer ?? null;
+}
+
+function Preview({ spec, settings, backgroundImage, customSounds }: { spec: ReplaySpec; settings: StudioSettings; backgroundImage: BundledBackdropMedia | null; customSounds: CustomSound[] }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef<AudioContext | null>(null);
   const previousProgressRef = useRef(0);
@@ -74,9 +82,10 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
       }) / settings.duration;
       if (eventProgress <= previous || eventProgress > next || soundedEventsRef.current.has(fill.signature)) continue;
       soundedEventsRef.current.add(fill.signature);
-      void playReplaySound(audio, fill.side === "buy" ? settings.buySound : settings.sellSound, fill.side);
+      const sound = fill.side === "buy" ? settings.buySound : settings.sellSound;
+      void playReplaySound(audio, sound, fill.side, customSoundBuffer(sound, customSounds));
     }
-  }, [previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, settings.speedrunMode, spec]);
+  }, [customSounds, previewHeight, previewWidth, settings.buySound, settings.chartLeadSeconds, settings.chartTrailSeconds, settings.duration, settings.sellSound, settings.speedrunMode, spec]);
 
   const draw = useCallback((next: number, playbackElapsedSeconds = next * settings.duration) => {
     const canvas = canvasRef.current;
@@ -127,11 +136,11 @@ function Preview({ spec, settings, backgroundImage }: { spec: ReplaySpec; settin
   useEffect(() => {
     let active = true;
     void ensureAudio().then((audio) => Promise.all([
-      prepareReplaySound(audio, settings.buySound),
-      prepareReplaySound(audio, settings.sellSound),
+      prepareReplaySound(audio, settings.buySound, customSoundBuffer(settings.buySound, customSounds)),
+      prepareReplaySound(audio, settings.sellSound, customSoundBuffer(settings.sellSound, customSounds)),
     ])).then(() => { if (active) setPlaying(true); }).catch(() => { if (active) setPlaying(true); });
     return () => { active = false; };
-  }, [ensureAudio, settings.buySound, settings.sellSound]);
+  }, [customSounds, ensureAudio, settings.buySound, settings.sellSound]);
   useEffect(() => () => {
     const audio = audioRef.current;
     audioRef.current = null;
@@ -214,6 +223,11 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   const [expanded, setExpanded] = useState(false);
   const [backgroundImage, setBackgroundImage] = useState<BundledBackdropMedia | null>(null);
   const backgroundImageRef = useRef<BundledBackdropMedia | null>(null);
+  const customBackdropInputRef = useRef<HTMLInputElement | null>(null);
+  const [customBackdropName, setCustomBackdropName] = useState("");
+  const customSoundInputRef = useRef<HTMLInputElement | null>(null);
+  const customSoundSideRef = useRef<"buy" | "sell">("buy");
+  const [customSounds, setCustomSounds] = useState<CustomSound[]>([]);
 
   const requestRelatedTradeChoice = useCallback((choice: RelatedTradeChoice, signal: AbortSignal): Promise<boolean> => {
     if (signal.aborted) return Promise.reject(new DOMException("Replay request aborted", "AbortError"));
@@ -319,8 +333,8 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
           ...savedSettings,
           width: 1920,
           height: 1080,
-          buySound: savedSettings.buySound === "custom" ? "pulse" : savedSettings.buySound,
-          sellSound: savedSettings.sellSound === "custom" ? "confirm" : savedSettings.sellSound,
+          buySound: savedSettings.buySound.startsWith("custom") ? "pulse" : savedSettings.buySound,
+          sellSound: savedSettings.sellSound.startsWith("custom") ? "confirm" : savedSettings.sellSound,
           aspectRatio: savedSettings.aspectRatio ?? "16:9",
         });
       })
@@ -358,6 +372,9 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   }, [settings, view]);
 
   useEffect(() => {
+    // A user upload owns the background slot; the bundled loader must not
+    // overwrite it when the aspect ratio or an unrelated setting changes.
+    if (settings.backgroundStyle === "custom") return;
     let active = true;
     void loadBundledBackdrop(settings.backgroundStyle, settings.aspectRatio).then((image) => {
       if (!active) {
@@ -380,6 +397,70 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
 
   const patch = <K extends keyof StudioSettings>(key: K, value: StudioSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
+  };
+
+  // Uploaded sounds go into one shared pool, so a file added from the buy menu
+  // is immediately selectable in the sell menu and vice versa.
+  const loadCustomSound = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      setError("Choose an audio file (MP3, WAV, M4A or OGG).");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Custom sounds must be 10 MB or smaller.");
+      return;
+    }
+    try {
+      const audio = new AudioContext();
+      const buffer = await audio.decodeAudioData(await file.arrayBuffer());
+      void audio.close();
+      const id = crypto.randomUUID().slice(0, 8);
+      const entry: CustomSound = { id, name: file.name.replace(/\.[^.]+$/, ""), buffer };
+      setCustomSounds((current) => [...current, entry]);
+      patch(customSoundSideRef.current === "buy" ? "buySound" : "sellSound", `custom:${id}` as SoundName);
+      setError("");
+    } catch {
+      setError("This audio file could not be decoded by Chrome.");
+    }
+  };
+
+  const pickCustomSound = (side: "buy" | "sell") => {
+    customSoundSideRef.current = side;
+    customSoundInputRef.current?.click();
+  };
+
+  // "Upload your own" in the backdrop dropdown. Images and videos share the
+  // slot; the renderer cover-crops either one for 16:9 and 9:16 alike.
+  const loadCustomBackdrop = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const isVideo = file.type.startsWith("video/");
+    const isImage = file.type.startsWith("image/");
+    if (!isVideo && !isImage) {
+      setError("Choose an image or a video file for the background.");
+      return;
+    }
+    if (file.size > (isVideo ? 100 : 20) * 1024 * 1024) {
+      setError(isVideo ? "Background videos must be 100 MB or smaller." : "Background images must be 20 MB or smaller.");
+      return;
+    }
+    try {
+      const media: BundledBackdropMedia = isVideo
+        ? await createCustomVideoBackdrop(file)
+        : await createImageBitmap(file);
+      disposeBundledBackdrop(backgroundImageRef.current);
+      backgroundImageRef.current = media;
+      setBackgroundImage(media);
+      setCustomBackdropName(file.name);
+      patch("backgroundStyle", "custom");
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "This background could not be loaded.");
+    }
   };
 
   const changeOpenPositionPnl = async (mode: StudioSettings["openPositionPnl"]) => {
@@ -501,6 +582,8 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
       const result = await exportReplayVideo(spec, config, {
         buySound: settings.buySound,
         sellSound: settings.sellSound,
+        buyCustomBuffer: customSoundBuffer(settings.buySound, customSounds),
+        sellCustomBuffer: customSoundBuffer(settings.sellSound, customSounds),
         eventVolume: 0.8,
       }, setExportProgress);
       const url = URL.createObjectURL(result.blob);
@@ -558,7 +641,7 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
         {view === "error" && <main className="wick-error-body"><div className="wick-kicker">TRADE LOOKUP</div><h1>We couldn’t retrieve this trade.</h1><p>{error}</p>{context.provider !== "fomo" && <label className="wick-wallet-fallback">Public Solana wallet address<input type="text" value={fallbackWalletInput} onChange={(event) => setFallbackWalletInput(event.target.value)} placeholder="Paste wallet address (comma-separate multiple)" /><small>Use this only if automatic Axiom wallet detection fails.</small></label>}<div><button type="button" className="wick-secondary" onClick={() => void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds, openPnlToDate: settings.openPositionPnl === "toDate" })}>Retry automatic</button>{context.provider !== "fomo" && <button type="button" className="wick-primary" onClick={() => { const wallets = normalizeWalletAddresses([fallbackWalletInput]); if (!wallets.length) { setError("Enter a valid public Solana wallet address."); return; } void buildCapturedReplay(settings.candleInterval, { duration: settings.duration, leadSeconds: settings.chartLeadSeconds, trailSeconds: settings.chartTrailSeconds, openPnlToDate: settings.openPositionPnl === "toDate" }, wallets); }}>Use wallet</button>}</div></main>}
 
         {view === "instant" && spec && <main className="wick-instant-body">
-          <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} /></section>
+          <section className="wick-preview-column"><Preview key={`${spec.id}:${JSON.stringify(settings)}`} spec={spec} settings={settings} backgroundImage={backgroundImage} customSounds={customSounds} /></section>
           <section className="wick-controls">
             {error && <div className="wick-error" role="alert">{error}</div>}
             <div className="wick-control-section"><div className="wick-section-title"><h3>{isBundledVideoBackdrop(settings.backgroundStyle) ? "Chart duration" : "Video duration"}</h3><span>{settings.duration} seconds</span></div><Segmented value={settings.duration} options={[6, 8, 10, 12].map((value) => ({ value, label: `${value}s` }))} onChange={(value) => void changeDuration(value)} /></div>
@@ -583,13 +666,23 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
     <h3>Background Design</h3>
     <span>Wicklapse</span>
   </div>
-  <select className="wick-sound-select" value={settings.backgroundStyle} onChange={(e) => patch("backgroundStyle", e.target.value as BackgroundStyle)}>
+  <select className="wick-sound-select" value={settings.backgroundStyle} onChange={(e) => {
+    const value = e.target.value as BackgroundStyle;
+    if (value === "custom") {
+      customBackdropInputRef.current?.click();
+      return;
+    }
+    patch("backgroundStyle", value);
+  }}>
     <option value="glow">Ambient Glow</option>
     <option value="solid">Solid Color</option>
     <option value="grid">Retro Grid</option>
     <option value="particles">Particles</option>
     {BUNDLED_BACKDROPS.map((backdrop) => <option key={backdrop.value} value={backdrop.value}>{backdrop.label}</option>)}
+    <option value="custom">Upload your own · image or video</option>
   </select>
+  <input ref={customBackdropInputRef} type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={(event) => void loadCustomBackdrop(event)} />
+  {settings.backgroundStyle === "custom" && <p>{customBackdropName ? `Using ${customBackdropName}. ` : "Uploads are not kept after a reload. "}<button type="button" className="wick-linkish" onClick={() => customBackdropInputRef.current?.click()}>Choose a different file</button></p>}
 </div>
 <div className="wick-control-section">
   <div className="wick-section-title">
@@ -604,8 +697,9 @@ export function InstantOverlay({ context, resolveContext, onClose }: InstantOver
   </select>
 </div>
             <div className="wick-control-grid wick-audio-grid">
-              <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => patch("buySound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">No sound</option></select></div>
-              <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => patch("sellSound", event.target.value as SoundName)}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup><option value="off">No sound</option></select></div>
+              <div className="wick-control-section"><h3>Buy audio</h3><select className="wick-sound-select" value={settings.buySound} onChange={(event) => { const value = event.target.value; if (value === "upload") { pickCustomSound("buy"); return; } patch("buySound", value as SoundName); }}><optgroup label="Wicklapse"><option value="pulse">Pulse</option><option value="chime">Chime</option><option value="click">Click</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{customSounds.length > 0 && <optgroup label="Your uploads">{customSounds.map((entry) => <option key={entry.id} value={`custom:${entry.id}`}>{entry.name}</option>)}</optgroup>}<option value="upload">Upload your own…</option><option value="off">No sound</option></select></div>
+              <div className="wick-control-section"><h3>Sell audio</h3><select className="wick-sound-select" value={settings.sellSound} onChange={(event) => { const value = event.target.value; if (value === "upload") { pickCustomSound("sell"); return; } patch("sellSound", value as SoundName); }}><optgroup label="Wicklapse"><option value="confirm">Confirm</option><option value="cash">Cash-out</option><option value="snap">Snap</option></optgroup><optgroup label="Sound pack">{BUNDLED_SOUND_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</optgroup>{customSounds.length > 0 && <optgroup label="Your uploads">{customSounds.map((entry) => <option key={entry.id} value={`custom:${entry.id}`}>{entry.name}</option>)}</optgroup>}<option value="upload">Upload your own…</option><option value="off">No sound</option></select></div>
+              <input ref={customSoundInputRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={(event) => void loadCustomSound(event)} />
             </div>
             <div className="wick-export-zone">
               {exportProgress !== null && <div className="wick-export-progress"><span>Rendering locally</span><b>{Math.round(exportProgress * 100)}%</b><progress max={1} value={exportProgress} /></div>}

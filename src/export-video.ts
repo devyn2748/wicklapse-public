@@ -18,7 +18,14 @@ export const BUNDLED_SOUND_PRESETS = [
 ] as const;
 
 export type BundledSoundName = (typeof BUNDLED_SOUND_PRESETS)[number]["value"];
-export type SoundName = "pulse" | "chime" | "click" | "confirm" | "cash" | "snap" | BundledSoundName | "custom" | "off";
+export type SoundName = "pulse" | "chime" | "click" | "confirm" | "cash" | "snap" | BundledSoundName | "custom" | `custom:${string}` | "off";
+
+/** User-uploaded sounds share one pool; each is addressed as `custom:<id>`.
+ *  The caller resolves the id to a buffer and passes it in, so this module
+ *  only needs to know that any custom sound plays the supplied buffer. */
+export function isCustomSound(sound: SoundName): boolean {
+  return sound === "custom" || sound.startsWith("custom:");
+}
 
 const soundFiles = new Map<string, string>(BUNDLED_SOUND_PRESETS.map((preset) => [preset.value, preset.file]));
 const soundData = new Map<string, Promise<ArrayBuffer>>();
@@ -38,7 +45,7 @@ export async function prepareReplaySound(
   sound: SoundName,
   customBuffer?: AudioBuffer | null,
 ): Promise<AudioBuffer | null> {
-  if (sound === "custom") return customBuffer ?? null;
+  if (isCustomSound(sound)) return customBuffer ?? null;
   if (!isBundledSound(sound)) return null;
   let contextCache = decodedSounds.get(audio);
   if (!contextCache) {
@@ -95,7 +102,7 @@ function scheduleTone(
   volume: number,
   side: TradeFill["side"],
 ): void {
-  if (sound === "off" || sound === "custom" || isBundledSound(sound)) return;
+  if (sound === "off" || isCustomSound(sound) || isBundledSound(sound)) return;
   const oscillator = audio.createOscillator();
   const gain = audio.createGain();
   const base = side === "buy" ? 620 : 330;
@@ -135,7 +142,7 @@ function scheduleReplaySound(
   volume: number,
   side: TradeFill["side"],
 ): void {
-  if (sound === "custom" || isBundledSound(sound)) {
+  if (isCustomSound(sound) || isBundledSound(sound)) {
     if (customBuffer) scheduleBuffer(audio, destination, when, customBuffer, volume);
     return;
   }

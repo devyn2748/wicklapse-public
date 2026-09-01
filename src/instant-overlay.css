@@ -123,3 +123,13 @@ button, input, select { font: inherit; }
   .wick-footer b { display: none; }
   .wick-preview canvas { max-height: 230px; object-fit: contain; }
 }
+
+.wick-linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--wick-accent, #4ade80);
+  text-decoration: underline;
+  cursor: pointer;
+}
