@@ -404,7 +404,7 @@ export function focusedFomoCandleUrl(
   } catch {
     return null;
   }
-  if (url.origin !== "https://fomo-api.mobula.io" || url.pathname !== "/api/2/token/ohlcv-history") return null;
+  if (url.origin !== "https://mobula-api.fomo.family" || url.pathname !== "/api/2/token/ohlcv-history") return null;
   if (!url.searchParams.get("address") || !url.searchParams.get("chainId") || !executions.length) return null;
   const capturedChain = canonicalChainId(url.searchParams.get("chainId"));
   const executionChains = new Set(executions.map((execution) => canonicalChainId(execution.chainId)).filter(Boolean));
@@ -425,7 +425,7 @@ export function focusedFomoCandleUrl(
   url.searchParams.set("usd", "true");
   url.searchParams.set("from", String(fromSeconds * 1_000));
   url.searchParams.set("to", String(toSeconds * 1_000));
-  url.searchParams.set("amount", "1000");
+  url.searchParams.delete("amount");
   return url.toString();
 }
 

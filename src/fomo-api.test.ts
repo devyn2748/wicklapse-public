@@ -144,21 +144,21 @@ describe("Fomo capture", () => {
   it("builds an automatic trade-scoped candle request from Fomo's session request", () => {
     const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
     const focused = focusedFomoCandleUrl(
-      `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1d&usd=true&from=1&to=2&amount=10`,
+      `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1d&usd=true&from=1&to=2`,
       context.tradeExecutions!,
     );
     const url = new URL(focused!);
     expect(url.searchParams.get("address")).toBe(tokenAddress);
     expect(url.searchParams.get("chainId")).toBe("evm:8453");
     expect(url.searchParams.get("period")).toBe("5s");
-    expect(url.searchParams.get("amount")).toBe("1000");
+    expect(url.searchParams.has("amount")).toBe(false);
     expect(Number(url.searchParams.get("from"))).toBeLessThan(Date.parse("2026-08-28T16:00:00.000Z"));
     expect(Number(url.searchParams.get("to"))).toBeGreaterThan(Date.parse("2026-08-28T16:05:00.000Z"));
   });
 
   it("matches candle captures by token and chain instead of token alone", () => {
     const baseCapture = {
-      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m`,
+      url: `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m`,
     };
     expect(fomoCandleCaptureMatches(baseCapture, tokenAddress, "base")).toBe(true);
     expect(fomoCandleCaptureMatches(baseCapture, tokenAddress, "ethereum")).toBe(false);
@@ -171,7 +171,7 @@ describe("Fomo capture", () => {
   it("rejects a focused request when the captured chart belongs to another chain", () => {
     const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
     expect(focusedFomoCandleUrl(
-      `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A1&period=1m&from=1&to=2&amount=10`,
+      `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A1&period=1m&from=1&to=2`,
       context.tradeExecutions!,
     )).toBeNull();
   });
@@ -250,7 +250,7 @@ describe("Fomo capture", () => {
   it("rejects same-token candles captured for a different trade window", () => {
     const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
     const capture = (capturedAt: number, timestamps: number[]) => ({
-      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=5s&from=1&to=2&amount=1000`,
+      url: `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=5s&from=1&to=2`,
       capturedAt,
       payload: { data: timestamps.map((timestamp) => [timestamp, 1, 2, 0.5, 1.5, 10]) },
     });
@@ -267,7 +267,7 @@ describe("Fomo capture", () => {
     const context = parseFomoTradeResponse(payload, { tradeId, pageUrl })!;
     const start = Date.parse("2026-08-28T16:00:00.000Z") / 1_000;
     const sparseCapture = {
-      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=30s&from=${(start - 60) * 1_000}&to=${(start + 360) * 1_000}&amount=1000`,
+      url: `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=30s&from=${(start - 60) * 1_000}&to=${(start + 360) * 1_000}`,
       capturedAt: 1,
       payload: { data: [
         { t: (start + 97) * 1_000, o: 1, h: 2, l: 0.5, c: 1.5, v: 10 },
@@ -284,7 +284,7 @@ describe("Fomo capture", () => {
     const start = Date.parse("2026-08-28T16:00:00.000Z") / 1_000;
     const end = Date.parse("2026-08-28T16:05:00.000Z") / 1_000;
     const capture = {
-      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m&from=1&to=2&amount=1000`,
+      url: `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m&from=1&to=2`,
       capturedAt: 1,
       payload: { data: [
         [start, 1, 2, 0.5, 1.5, 10],
@@ -310,7 +310,7 @@ describe("Fomo capture", () => {
       { ...context.tradeExecutions![1]!, timestamp: start + 3_300, signature: "later-sell", providerTradeId: "later-trade" },
     ];
     const firstTradeOnly = {
-      url: `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m&from=1&to=2&amount=1000`,
+      url: `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${tokenAddress}&chainId=evm%3A8453&period=1m&from=1&to=2`,
       capturedAt: 1,
       payload: { data: [
         [start, 1, 2, 0.5, 1.5, 10],

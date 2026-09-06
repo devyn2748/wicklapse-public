@@ -163,7 +163,7 @@ async function retrieveTradeContext(
           const sessionCapture = [...captures].reverse().find((capture) => {
             try {
               const url = new URL(capture.url);
-              return url.origin === "https://fomo-api.mobula.io"
+              return url.origin === "https://mobula-api.fomo.family"
                 && url.pathname === "/api/2/token/ohlcv-history"
                 && fomoCandleCaptureMatches(capture, context.tokenMint!, context.chainId);
             } catch {
@@ -172,7 +172,7 @@ async function retrieveTradeContext(
           });
           const chainId = context.tradeExecutions[0]?.chainId ?? context.chainId;
           const syntheticTemplate = chainId
-            ? `https://fomo-api.mobula.io/api/2/token/ohlcv-history?address=${encodeURIComponent(context.tokenMint)}&chainId=${encodeURIComponent(chainId)}&period=1m&usd=true&from=1&to=2&amount=1000`
+            ? `https://mobula-api.fomo.family/api/2/token/ohlcv-history?address=${encodeURIComponent(context.tokenMint)}&chainId=${encodeURIComponent(chainId)}&period=1m&usd=true&from=1&to=2`
             : null;
           const focusedUrl = focusedFomoCandleUrl(
             sessionCapture?.url ?? syntheticTemplate ?? "",

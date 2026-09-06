@@ -2,7 +2,7 @@ import { canonicalChainId } from "./chains";
 
 const BRIDGE_MESSAGE_SOURCE = "wicklapse-fomo-bridge";
 const BRIDGE_STATE_KEY = "__wicklapseFomoBridgeV2";
-const MOBULA_ORIGIN = "https://fomo-api.mobula.io";
+const MOBULA_ORIGIN = "https://mobula-api.fomo.family";
 const MOBULA_PATH = "/api/2/token/ohlcv-history";
 const ALLOWED_PERIODS = new Set(["1s", "5s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w"]);
 
@@ -31,15 +31,14 @@ export function validatedFocusedUrl(rawUrl: string, template: Pick<Request, "url
     const requested = new URL(rawUrl);
     const captured = new URL(template.url);
     if (mobulaRequestKey(requested) !== mobulaRequestKey(captured)) return null;
-    for (const name of ["address", "chainId", "period", "from", "to", "amount"]) {
+    for (const name of ["address", "chainId", "period", "from", "to"]) {
       if (requested.searchParams.getAll(name).length !== 1) return null;
     }
     const period = requested.searchParams.get("period");
     const from = Number(requested.searchParams.get("from"));
     const to = Number(requested.searchParams.get("to"));
-    const amount = Number(requested.searchParams.get("amount"));
     if (!period || !ALLOWED_PERIODS.has(period) || !Number.isFinite(from) || !Number.isFinite(to)
-      || from < 0 || to <= from || !Number.isInteger(amount) || amount < 2 || amount > 1_000) return null;
+      || from < 0 || to <= from) return null;
     const safe = new URL(`${MOBULA_ORIGIN}${MOBULA_PATH}`);
     safe.searchParams.set("address", captured.searchParams.get("address")!);
     safe.searchParams.set("chainId", captured.searchParams.get("chainId")!);
@@ -47,7 +46,6 @@ export function validatedFocusedUrl(rawUrl: string, template: Pick<Request, "url
     safe.searchParams.set("usd", "true");
     safe.searchParams.set("from", String(Math.trunc(from)));
     safe.searchParams.set("to", String(Math.trunc(to)));
-    safe.searchParams.set("amount", String(amount));
     return safe;
   } catch {
     return null;
